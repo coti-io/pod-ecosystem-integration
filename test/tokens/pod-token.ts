@@ -1,0 +1,556 @@
+/**
+ * Cross-chain `PodERC20` + `PodErc20CotiMother` tests (mint/sync, transfer, approve, pending, errors).
+ *
+ * These exercises COTI MPC on garbled 256-bit balances (`syncBalances` uses `offBoardToUser` per account). If
+ * `batchProcessRequests` fails, try raising `COTI_MINE_GAS_POD_TOKEN`.
+ *
+ * Run explicitly: `npm run test:pod-token` (sets `POD_TOKEN_SYSTEM_TESTS=1`).
+ * Running `hardhat test test/tokens/pod-token.ts` without that env skips the whole suite (`-` in node:test output);
+ * skipped suites do not run `before` or `it`, so there are no step logs unless you enable the flag.
+ *
+ * Step logs use `[mpc-test] pod-token: …` (see `pt()`); grep `pod-token` in the test output to follow phases.
+ */
+import assert from "node:assert/strict";
+import { afterEach, before, describe, it } from "node:test";
+import { network } from "hardhat";
+import { decodeAbiParameters, encodeFunctionData } from "viem";
+import { logStep } from "../system/mpc-test-utils.js";
+import {
+  assertIncludesInsensitive,
+  completePodOpRoundTrip,
+  encryptAmount,
+  mineLatestOutboundRoundTrip,
+  mintOnCoti,
+  mintOnCotiAndSync,
+  syncPodBalancesRoundTrip,
+  readAllowanceWithPending,
+  readBalanceWithPending,
+  readDecryptedAllowance,
+  readDecryptedBalance,
+  setupPodTokenTestContext,
+  utf8FromFailedRequestBytes,
+  type PodTokenTestContext,
+} from "./test-token-utils.js";
+import {
+  collectInboxFeesAfterTest,
+  podTwoWayWriteOptions,
+} from "../system/mpc-test-utils.js";
+
+const runPodTokenSystem = process.env.POD_TOKEN_SYSTEM_TESTS === "1";
+const d = runPodTokenSystem ? describe : describe.skip;
+
+if (!runPodTokenSystem) {
+  logStep(
+    "pod-token: suite skipped — POD_TOKEN_SYSTEM_TESTS is not \"1\", so `before`/tests never run and no step logs appear. Use: npm run test:pod-token"
+  );
+}
+
+/** Step log for this suite (grep `pod-token`). */
+const pt = (message: string) => logStep(`pod-token: ${message}`);
+
+d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
+  const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
+  const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
+
+  let ctx: PodTokenTestContext;
+
+  afterEach(async function () {
+    if (ctx) await collectInboxFeesAfterTest(ctx.base);
+  });
+
+  before(async function () {
+    pt("before: connecting networks and deploying PodERC20 + PodErc20CotiMother");
+    // Fresh COTI inbox + mother registration avoids stale `raise`/nonce state vs newly deployed namespaces.
+    if (process.env.COTI_REUSE_CONTRACTS === undefined) {
+      process.env.COTI_REUSE_CONTRACTS = "false";
+    }
+    ctx = await setupPodTokenTestContext({ sepoliaViem, cotiViem });
+    pt("before: seed Bob on COTI + sync so PoD balanceOf(Bob) is valid zero ciphertext (not uninitialized storage)");
+    await syncPodBalancesRoundTrip(ctx, [ctx.bob.address], "seedBobZero");
+    pt(`before: ready (owner=${ctx.owner}, bob=${ctx.bob.address}, pod=${ctx.pod.address})`);
+  });
+
+  it("mint on COTI + sync on PoD updates balances", async function () {
+    pt("case mint+sync: start");
+    const amount = 10_000n;
+    pt(`case mint+sync: mintOnCotiAndSync owner amount=${amount}`);
+    await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount }], "mintSyncOwner");
+
+    pt("case mint+sync: read decrypted balance + pending flag");
+    const bal = await readDecryptedBalance(ctx, ctx.owner);
+    assert.equal(bal, amount);
+    const st = await readBalanceWithPending(ctx, ctx.owner);
+    assert.equal(st.pending, false);
+    pt("case mint+sync: done (balance matches, not pending)");
+  });
+
+  it("simple transfer: round-trip updates sender and receiver balances", async function () {
+    pt("case simple transfer: start");
+    const start = 5_000n;
+    const sendAmt = 1_200n;
+    const ownerBefore = await readDecryptedBalance(ctx, ctx.owner);
+    const bobBefore = await readDecryptedBalance(ctx, ctx.bob.address);
+    pt(`case simple transfer: fund owner with ${start}`);
+    await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "xferFund");
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerBefore + start);
+
+    pt(`case simple transfer: encrypt ${sendAmt} and run transfer round-trip`);
+    const itAmount = await encryptAmount(ctx, sendAmt);
+    await completePodOpRoundTrip(ctx, "xferSimple", () =>
+      ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount, ctx.base.podTwoWayFees.callbackFeeWei], podTwoWayWriteOptions(ctx.base.podTwoWayFees))
+    );
+
+    pt("case simple transfer: assert owner and bob balances");
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerBefore + start - sendAmt);
+    assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), bobBefore + sendAmt);
+    pt("case simple transfer: done");
+  });
+
+  it("approve then transferFrom updates balances and allowance", async function () {
+    pt("case approve+transferFrom: start");
+    const start = 8_000n;
+    const allowanceAmt = 3_000n;
+    const spendAmt = 2_000n;
+    const ownerBefore = await readDecryptedBalance(ctx, ctx.owner);
+    const bobBefore = await readDecryptedBalance(ctx, ctx.bob.address);
+    pt(`case approve+transferFrom: fund owner ${start}`);
+    await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "apprFund");
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerBefore + start);
+
+    const itAllow = await encryptAmount(ctx, allowanceAmt);
+    let ap = await readAllowanceWithPending(ctx, ctx.owner, ctx.owner);
+    assert.equal(ap.pending, false);
+    pt(`case approve+transferFrom: approve self allowance=${allowanceAmt}`);
+    await completePodOpRoundTrip(ctx, "apprSelf", () =>
+      ctx.podAsCoti.write.approve([ctx.owner, itAllow, ctx.base.podTwoWayFees.callbackFeeWei], podTwoWayWriteOptions(ctx.base.podTwoWayFees))
+    );
+
+    ap = await readAllowanceWithPending(ctx, ctx.owner, ctx.owner);
+    assert.equal(ap.pending, false);
+    const dec = await readDecryptedAllowance(ctx, ctx.owner, ctx.owner);
+    assert.equal(dec.ownerCt, allowanceAmt);
+    assert.equal(dec.spenderCt, allowanceAmt);
+    pt("case approve+transferFrom: allowance ciphertexts match");
+
+    pt(`case approve+transferFrom: transferFrom owner→bob spend=${spendAmt}`);
+    const itSpend = await encryptAmount(ctx, spendAmt);
+    await completePodOpRoundTrip(ctx, "xferFrom", () =>
+      ctx.podAsCoti.write.transferFrom(
+        [ctx.owner, ctx.bob.address, itSpend, ctx.base.podTwoWayFees.callbackFeeWei],
+        podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+      )
+    );
+
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerBefore + start - spendAmt);
+    assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), bobBefore + spendAmt);
+    // Allowance is not reduced on the PoD mirror today (`PodErc20CotiMother.transferFrom` does not touch garbled allowance);
+    // balances above confirm approve + transferFrom round-trips succeeded.
+    const after = await readDecryptedAllowance(ctx, ctx.owner, ctx.owner);
+    assert.equal(after.ownerCt, allowanceAmt);
+    assert.equal(after.spenderCt, allowanceAmt);
+    pt("case approve+transferFrom: done (PoD allowance mirror unchanged as expected)");
+  });
+
+  it("allows transfer to a recipient while they are not sender-pending (receiver not locked)", async function () {
+    pt("case receiver not locked: start");
+    const start = 5_000n;
+    const ownerToBob = 100n;
+    const bobToOwner = 50n;
+    pt(`case receiver not locked: fund owner=${start} bob=${start}`);
+    await mintOnCotiAndSync(ctx, [
+      { address: ctx.owner, amount: start },
+      { address: ctx.bob.address, amount: start },
+    ], "recvNotLockedFund");
+
+    pt("case receiver not locked: owner -> bob (PoD only, not mined yet)");
+    const itOwnerSend = await encryptAmount(ctx, ownerToBob);
+    const ownerTx = await ctx.podAsCoti.write.transfer(
+      [ctx.bob.address, itOwnerSend, ctx.base.podTwoWayFees.callbackFeeWei],
+      podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+    );
+    await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: ownerTx });
+    const ownerMid = await readBalanceWithPending(ctx, ctx.owner);
+    const bobMid = await readBalanceWithPending(ctx, ctx.bob.address);
+    assert.equal(ownerMid.pending, true);
+    assert.equal(bobMid.pending, false);
+    pt("case receiver not locked: bob -> owner should succeed while owner->bob is in flight");
+
+    const itBobSend = await encryptAmount(ctx, bobToOwner);
+    const bobTx = await ctx.podAsCoti.write.transfer(
+      [ctx.owner, itBobSend, ctx.base.podTwoWayFees.callbackFeeWei],
+      podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+    );
+    await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: bobTx });
+    const bobAfter = await readBalanceWithPending(ctx, ctx.bob.address);
+    assert.equal(bobAfter.pending, true);
+
+    pt("case receiver not locked: mine both round-trips");
+    await mineLatestOutboundRoundTrip(ctx, "recvNotLockedMine1");
+    await mineLatestOutboundRoundTrip(ctx, "recvNotLockedMine2");
+
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), start - ownerToBob + bobToOwner);
+    assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), start + ownerToBob - bobToOwner);
+    pt("case receiver not locked: done");
+  });
+
+  it("reverts with TransferAlreadyPending while a transfer is in flight", async function () {
+    pt("case pending guard: start");
+    const start = 4_000n;
+    const ownerBefore = await readDecryptedBalance(ctx, ctx.owner);
+    pt(`case pending guard: fund owner ${start}`);
+    await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "pendFund");
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerBefore + start);
+
+    pt("case pending guard: submit first transfer (PoD only, not mined yet on COTI)");
+    const itSmall = await encryptAmount(ctx, 100n);
+    const txHash = await ctx.podAsCoti.write.transfer(
+      [ctx.bob.address, itSmall, ctx.base.podTwoWayFees.callbackFeeWei],
+      podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+    );
+    await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: txHash });
+
+    const mid = await readBalanceWithPending(ctx, ctx.owner);
+    assert.equal(mid.pending, true);
+    pt("case pending guard: owner pending=true, expect second transfer to revert");
+
+    const itAnother = await encryptAmount(ctx, 200n);
+    await assert.rejects(
+      () =>
+        ctx.podAsCoti.write.transfer([ctx.bob.address, itAnother, ctx.base.podTwoWayFees.callbackFeeWei], podTwoWayWriteOptions(ctx.base.podTwoWayFees)),
+      (e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        return msg.includes("TransferAlreadyPending");
+      }
+    );
+
+    pt("case pending guard: mine round-trip to clear pending");
+    await mineLatestOutboundRoundTrip(ctx, "pendClear");
+    const end = await readBalanceWithPending(ctx, ctx.owner);
+    assert.equal(end.pending, false);
+    assert.equal(end.balance, ownerBefore + start - 100n);
+    pt("case pending guard: done (cleared, balance reduced by 100)");
+  });
+
+  it("failed transfer clears pending and stores a meaningful error", async function () {
+    pt("case failed transfer: start");
+    const start = 500n;
+    const ownerBefore = await readDecryptedBalance(ctx, ctx.owner);
+    const bobBefore = await readDecryptedBalance(ctx, ctx.bob.address);
+    pt(`case failed transfer: fund owner ${start}, then attempt transfer > balance`);
+    await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "failFund");
+    const ownerAfterMint = await readDecryptedBalance(ctx, ctx.owner);
+    assert.equal(ownerAfterMint, ownerBefore + start);
+
+    const tooMuch = ownerAfterMint + 1n;
+    pt(`case failed transfer: attempt ${tooMuch} (> balance ${ownerAfterMint})`);
+    const itAmount = await encryptAmount(ctx, tooMuch);
+    pt("case failed transfer: round-trip (COTI should reject insufficient balance)");
+    const { cotiIncomingRequestId } = await completePodOpRoundTrip(ctx, "failXfer", () =>
+      ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount, ctx.base.podTwoWayFees.callbackFeeWei], podTwoWayWriteOptions(ctx.base.podTwoWayFees))
+    );
+
+    const st = await readBalanceWithPending(ctx, ctx.owner);
+    assert.equal(st.pending, false);
+    const ownerAfterFail = await readDecryptedBalance(ctx, ctx.owner);
+    assert.equal(ownerAfterFail, ownerAfterMint);
+    assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), bobBefore);
+    pt(`case failed transfer: pending cleared, failedRequests key=${cotiIncomingRequestId}`);
+
+    const errHex = (await ctx.pod.read.failedRequests([cotiIncomingRequestId])) as `0x${string}`;
+    const text = utf8FromFailedRequestBytes(errHex);
+    assertIncludesInsensitive(text, "insufficient");
+    pt(`case failed transfer: done (error text includes "insufficient")`);
+  });
+
+  // Matches `MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI` in `test/system/mpc-test-utils.ts`. When we pin `gasPrice` on an
+  // auto-fee tx to this value, the inbox's runtime `tx.gasprice` equals the price used by `estimateGas` in setup,
+  // so the contract's internal `_estimateTwoWayFeeInLocalToken()` produces the exact same (target, caller) split.
+  const FEE_CALC_GAS_PRICE_WEI = 300_529_002n;
+  const FEE_EST_REMOTE_CALL_SIZE = 512n;
+  const FEE_EST_CALLBACK_CALL_SIZE = 512n;
+  const FEE_EST_REMOTE_EXEC_GAS = 300_000n;
+  const FEE_EST_CALLBACK_EXEC_GAS = 300_000n;
+  /** Small pad that absorbs mulDiv rounding in `calculateTwoWayFeeRequiredInLocalToken` vs `validateAndPrepareTwoWayFees`. */
+  const paddedPodFee = (x: bigint) => x + x / 100n + 1n;
+
+  it("estimateFee matches inbox.calculateTwoWayFeeRequiredInLocalToken for the auto-fee constants", async function () {
+    pt("case estimateFee: start");
+    const [targetWei, callerWei] = (await ctx.base.contracts.inboxSepolia.read.calculateTwoWayFeeRequiredInLocalToken([
+      FEE_EST_REMOTE_CALL_SIZE,
+      FEE_EST_CALLBACK_CALL_SIZE,
+      FEE_EST_REMOTE_EXEC_GAS,
+      FEE_EST_CALLBACK_EXEC_GAS,
+      FEE_CALC_GAS_PRICE_WEI,
+    ])) as [bigint, bigint];
+    pt(`case estimateFee: inbox target=${targetWei} caller=${callerWei}`);
+    assert.ok(targetWei > 0n, "targetWei must be non-zero");
+    assert.ok(callerWei > 0n, "callerWei must be non-zero");
+    // `estimateFee()` uses `tx.gasprice`; in plain `eth_call` that is 0, so `calculateTwoWayFeeRequiredInLocalToken`
+    // returns (0, 0). Override the call-level `gasPrice` so the view sees the same tx.gasprice as the helper above
+    // and `_estimateTwoWayFeeInLocalToken` produces the exact same (target, callback) split.
+    const estimateFeeAbi = [
+      {
+        type: "function",
+        name: "estimateFee",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [
+          { name: "totalFeeWei", type: "uint256" },
+          { name: "targetFeeWei", type: "uint256" },
+          { name: "callbackFeeWei", type: "uint256" },
+        ],
+      },
+    ] as const;
+    const callResult = await ctx.base.sepolia.publicClient.call({
+      to: ctx.pod.address as `0x${string}`,
+      data: encodeFunctionData({ abi: estimateFeeAbi, functionName: "estimateFee" }),
+      gasPrice: FEE_CALC_GAS_PRICE_WEI,
+    });
+    const rawData = (callResult?.data ?? "0x") as `0x${string}`;
+    const [total, target, callback] = decodeAbiParameters(
+      [{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }],
+      rawData
+    ) as [bigint, bigint, bigint];
+    pt(`case estimateFee: contract total=${total} target=${target} callback=${callback}`);
+    assert.equal(target, targetWei, "contract target fee must match inbox calculation");
+    assert.equal(callback, callerWei, "contract callback fee must match inbox calculation");
+    assert.equal(total, targetWei + callerWei, "total must equal target + callback");
+    pt("case estimateFee: done (internal estimator matches inbox helper exactly)");
+  });
+
+  it("auto-fee transfer: contract computes callback fee internally and round-trips", async function () {
+    pt("case auto-fee transfer: start");
+    const start = 3_500n;
+    const sendAmt = 900n;
+    const ownerBefore = await readDecryptedBalance(ctx, ctx.owner);
+    const bobBefore = await readDecryptedBalance(ctx, ctx.bob.address);
+    pt(`case auto-fee transfer: fund owner with ${start}`);
+    await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "autoXferFund");
+
+    const [targetWei, callerWei] = (await ctx.base.contracts.inboxSepolia.read.calculateTwoWayFeeRequiredInLocalToken([
+      FEE_EST_REMOTE_CALL_SIZE,
+      FEE_EST_CALLBACK_CALL_SIZE,
+      FEE_EST_REMOTE_EXEC_GAS,
+      FEE_EST_CALLBACK_EXEC_GAS,
+      FEE_CALC_GAS_PRICE_WEI,
+    ])) as [bigint, bigint];
+    // Add 1% pad: `calculateTwoWayFeeRequiredInLocalToken` rounds target down in mulDiv (remote→local), and
+    // `validateAndPrepareTwoWayFees` rounds again (local→remote), so equality at the boundary can fail by a few units.
+    const totalValue = paddedPodFee(targetWei + callerWei);
+    pt(`case auto-fee transfer: inbox target=${targetWei} caller=${callerWei} totalPadded=${totalValue}`);
+
+    const itAmount = await encryptAmount(ctx, sendAmt);
+    await completePodOpRoundTrip(ctx, "autoXfer", () =>
+      ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount], {
+        value: totalValue,
+        gasPrice: FEE_CALC_GAS_PRICE_WEI,
+      })
+    );
+
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerBefore + start - sendAmt);
+    assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), bobBefore + sendAmt);
+    pt("case auto-fee transfer: done (succeeded with msg.value = inbox-derived totalExact)");
+  });
+
+  it("auto-fee transfer reverts when msg.value is below the contract's internal estimate", async function () {
+    pt("case auto-fee insufficient value: start");
+    const itAmount = await encryptAmount(ctx, 1n);
+    await assert.rejects(
+      () =>
+        ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount], {
+          value: 1n,
+          gasPrice: FEE_CALC_GAS_PRICE_WEI,
+        }),
+      (e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        return /PodERC20: callback exceeds total|totalFee|value/i.test(msg);
+      }
+    );
+    pt("case auto-fee insufficient value: done");
+  });
+
+  it("auto-fee approve: contract computes callback fee internally and round-trips", async function () {
+    pt("case auto-fee approve: start");
+    const allowanceAmt = 1_500n;
+    const [targetWei, callerWei] = (await ctx.base.contracts.inboxSepolia.read.calculateTwoWayFeeRequiredInLocalToken([
+      FEE_EST_REMOTE_CALL_SIZE,
+      FEE_EST_CALLBACK_CALL_SIZE,
+      FEE_EST_REMOTE_EXEC_GAS,
+      FEE_EST_CALLBACK_EXEC_GAS,
+      FEE_CALC_GAS_PRICE_WEI,
+    ])) as [bigint, bigint];
+    const totalValue = paddedPodFee(targetWei + callerWei);
+
+    const itAllow = await encryptAmount(ctx, allowanceAmt);
+    await completePodOpRoundTrip(ctx, "autoAppr", () =>
+      ctx.podAsCoti.write.approve([ctx.bob.address, itAllow], {
+        value: totalValue,
+        gasPrice: FEE_CALC_GAS_PRICE_WEI,
+      })
+    );
+
+    const dec = await readDecryptedAllowance(ctx, ctx.owner, ctx.bob.address);
+    assert.equal(dec.ownerCt, allowanceAmt);
+    assert.equal(dec.spenderCt, allowanceAmt);
+    pt("case auto-fee approve: done");
+  });
+
+  it("plain uint256 transfer round-trips balances", async function () {
+    pt("case plain transfer: start");
+    const start = 2_400n;
+    const sendAmt = 700n;
+    const ownerBefore = await readDecryptedBalance(ctx, ctx.owner);
+    const bobBefore = await readDecryptedBalance(ctx, ctx.bob.address);
+    await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "plainXferFund");
+
+    await completePodOpRoundTrip(ctx, "plainXfer", () =>
+      ctx.podAsCoti.write.transfer(
+        [ctx.bob.address, sendAmt, ctx.base.podTwoWayFees.callbackFeeWei],
+        podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+      )
+    );
+
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerBefore + start - sendAmt);
+    assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), bobBefore + sendAmt);
+    pt("case plain transfer: done");
+  });
+
+  it("plain uint256 approve + transferFrom round-trip allowance and balances", async function () {
+    pt("case plain approve/transferFrom: start");
+    const start = 5_000n;
+    const allowanceAmt = 2_100n;
+    const spendAmt = 1_300n;
+    const ownerBefore = await readDecryptedBalance(ctx, ctx.owner);
+    const bobBefore = await readDecryptedBalance(ctx, ctx.bob.address);
+    await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "plainApprFund");
+
+    await completePodOpRoundTrip(ctx, "plainAppr", () =>
+      ctx.podAsCoti.write.approve(
+        [ctx.owner, allowanceAmt, ctx.base.podTwoWayFees.callbackFeeWei],
+        podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+      )
+    );
+    const dec = await readDecryptedAllowance(ctx, ctx.owner, ctx.owner);
+    assert.equal(dec.ownerCt, allowanceAmt);
+
+    await completePodOpRoundTrip(ctx, "plainXferFrom", () =>
+      ctx.podAsCoti.write.transferFrom(
+        [ctx.owner, ctx.bob.address, spendAmt, ctx.base.podTwoWayFees.callbackFeeWei],
+        podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+      )
+    );
+
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerBefore + start - spendAmt);
+    assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), bobBefore + spendAmt);
+    pt("case plain approve/transferFrom: done");
+  });
+
+  it("plain uint256 burn round-trips balance", async function () {
+    pt("case plain burn: start");
+    const start = 1_800n;
+    const burnAmt = 600n;
+    const ownerBefore = await readDecryptedBalance(ctx, ctx.owner);
+    await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "plainBurnFund");
+
+    await completePodOpRoundTrip(ctx, "plainBurn", () =>
+      ctx.podAsCoti.write.burn(
+        [burnAmt, ctx.base.podTwoWayFees.callbackFeeWei],
+        podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+      )
+    );
+
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerBefore + start - burnAmt);
+    pt("case plain burn: done");
+  });
+
+  it("PodErc20Mintable: minter mints encrypted amount and sync updates PoD", async function () {
+    pt("case mint encrypted: start");
+    const amount = 7_777n;
+    const bobBefore = await readDecryptedBalance(ctx, ctx.bob.address);
+    const itAmount = await encryptAmount(ctx, amount);
+    await completePodOpRoundTrip(ctx, "mintEncrypted", () =>
+      ctx.podAsCoti.write.mint(
+        [ctx.bob.address, itAmount, ctx.base.podTwoWayFees.callbackFeeWei],
+        podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+      )
+    );
+    assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), bobBefore + amount);
+    pt("case mint encrypted: done");
+  });
+
+  it("PodErc20Mintable: minter mints plain uint256 and sync updates PoD", async function () {
+    pt("case mint plain: start");
+    const amount = 4_242n;
+    const bobBefore = await readDecryptedBalance(ctx, ctx.bob.address);
+    await completePodOpRoundTrip(ctx, "mintPlain", () =>
+      ctx.podAsCoti.write.mint(
+        [ctx.bob.address, amount, ctx.base.podTwoWayFees.callbackFeeWei],
+        podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+      )
+    );
+    assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), bobBefore + amount);
+    pt("case mint plain: done");
+  });
+
+  it("PodErc20Mintable: non-minter mint reverts with OnlyMinter", async function () {
+    pt("case OnlyMinter revert: start");
+    const nonMinter = ctx.bob.address;
+    const rogue = await sepoliaViem.deployContract("PodErc20Mintable", [
+      nonMinter,
+      ctx.base.chainIds.coti,
+      ctx.base.contracts.inboxSepolia.address,
+      ctx.podCotiMother.address,
+      "Rogue",
+      "ROGUE",
+    ]);
+    const itAmount = await encryptAmount(ctx, 1n);
+    await assert.rejects(
+      () =>
+        rogue.write.mint(
+          [ctx.bob.address, itAmount, ctx.base.podTwoWayFees.callbackFeeWei],
+          podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+        ),
+      (e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        return msg.includes("OnlyMinter");
+      }
+    );
+    pt("case OnlyMinter revert: done");
+  });
+
+  it("base PodERC20 mint reverts with MintNotAllowed", async function () {
+    pt("case MintNotAllowed revert: start");
+    const basePod = await sepoliaViem.deployContract("PodERC20", [
+      ctx.base.chainIds.coti,
+      ctx.base.contracts.inboxSepolia.address,
+      ctx.podCotiMother.address,
+      "Base PoD",
+      "BASE",
+    ]);
+    const itAmount = await encryptAmount(ctx, 1n);
+    await assert.rejects(
+      () =>
+        basePod.write.mint(
+          [ctx.bob.address, itAmount, ctx.base.podTwoWayFees.callbackFeeWei],
+          podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+        ),
+      (e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        return msg.includes("MintNotAllowed");
+      }
+    );
+    // Plain mint path must revert too.
+    await assert.rejects(
+      () =>
+        basePod.write.mint(
+          [ctx.bob.address, 1n, ctx.base.podTwoWayFees.callbackFeeWei],
+          podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+        ),
+      (e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        return msg.includes("MintNotAllowed");
+      }
+    );
+    pt("case MintNotAllowed revert: done");
+  });
+});

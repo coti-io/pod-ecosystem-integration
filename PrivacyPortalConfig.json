@@ -1,0 +1,88 @@
+{
+  "networks": {
+    "sepolia": {
+      "chainId": 11155111,
+      "privacyPortal": {
+        "factory": "",
+        "portalImplementation": "",
+        "podTokenImplementation": "",
+        "inbox": "",
+        "cotiNetwork": "cotiTestnet",
+        "cotiChainId": 7082400,
+        "cotiMother": ""
+      },
+      "tokens": [
+        {
+          "erc20": "0xd3f5c63f4D87D2235b295FbA83351d31d0eD1BeE",
+          "name": "Private MyTestToken",
+          "symbol": "pMTT",
+          "decimals": 18,
+          "privacyPortal": "",
+          "pToken": ""
+        },
+        {
+          "erc20": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+          "name": "Private USDC",
+          "symbol": "pUSDC",
+          "decimals": 6,
+          "privacyPortal": "",
+          "pToken": ""
+        },
+        {
+          "erc20": "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9",
+          "name": "Private WETH",
+          "symbol": "pWETH",
+          "decimals": 18,
+          "privacyPortal": "",
+          "pToken": ""
+        }
+      ]
+    },
+    "avalancheFuji": {
+      "chainId": 43113,
+      "privacyPortal": {
+        "factory": "",
+        "portalImplementation": "",
+        "podTokenImplementation": "",
+        "inbox": "0xB4A53FE02401fDFA8DAc00450dA3FfF8D01502F8",
+        "cotiNetwork": "cotiTestnet",
+        "cotiChainId": 7082400,
+        "cotiMother": ""
+      },
+      "tokens": [
+        {
+          "erc20": "0x328e70e1c52662cd5f19f824fcb8b463d77a6686",
+          "name": "Private MyTestToken",
+          "symbol": "pMTT",
+          "decimals": 18,
+          "privacyPortal": "",
+          "pToken": ""
+        },
+        {
+          "erc20": "0x5425890298aed601595a70AB815c96711a31Bc65",
+          "name": "Private USDC",
+          "symbol": "pUSDC",
+          "decimals": 6,
+          "privacyPortal": "",
+          "pToken": ""
+        },
+        {
+          "erc20": "0xd00ae08403B9bbb9124bB305C09058E32C39A48c",
+          "name": "Private WAVAX",
+          "symbol": "pWAVAX",
+          "decimals": 18,
+          "privacyPortal": "",
+          "pToken": ""
+        }
+      ]
+    },
+    "cotiTestnet": {
+      "chainId": 7082400,
+      "privacyPortal": {
+        "cotiMother": "",
+        "inbox": "0xd0d7d663217fc531504b930d810995118768fa37"
+      },
+      "tokens": []
+    }
+  }
+}

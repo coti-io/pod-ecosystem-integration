@@ -1,0 +1,28 @@
+{
+  "folders": [
+    {
+      "name": "inbox",
+      "path": "../coti-pod-inbox-contracts"
+    },
+    {
+      "name": "coti-contracts",
+      "path": "../coti-contracts"
+    },
+    {
+      "name": "integration",
+      "path": "."
+    },
+    {
+      "name": "legacy (pod-mpc-lib)",
+      "path": "../pod-mpc-lib"
+    }
+  ],
+  "settings": {
+    "solidity.compileUsingRemoteVersion": "v0.8.28+commit.7893614a",
+    "files.exclude": {
+      "**/node_modules": true,
+      "**/artifacts": true,
+      "**/cache": true
+    }
+  }
+}
