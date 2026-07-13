@@ -30,6 +30,7 @@ export type PodPayrollBackend = {
   pTokenCallbackFeeWei: bigint;
   cotiPrivateKey: Hex;
   tokenAdapter: PayrollTokenAdapter;
+  ensureFacadeTokenIdle?: (facade: Address, label: string) => Promise<void>;
 };
 
 const REGISTER_LEAF_SELECTOR = toFunctionSelector(
@@ -93,7 +94,8 @@ export class PodPayrollBackendImpl implements PodPayrollBackend {
     readonly pTokenTransferFeeWei: bigint,
     readonly pTokenCallbackFeeWei: bigint,
     readonly cotiPrivateKey: Hex,
-    readonly tokenAdapter: PayrollTokenAdapter
+    readonly tokenAdapter: PayrollTokenAdapter,
+    readonly ensureFacadeTokenIdle?: (facade: Address, label: string) => Promise<void>
   ) {}
 
   async buildItAmount(amount: bigint, purpose: "register" | "claim" = "claim") {

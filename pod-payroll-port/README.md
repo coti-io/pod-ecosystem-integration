@@ -25,7 +25,7 @@ pod-payroll-port/
   contracts/coti/   PrivatePayrollCoti
   test/stories/     S01–S31 (35 tests, copied from sablier-payroll)
   test/lib/         PoD scenario, merkle, facade, async mining
-  docs/             Architecture + iteration gap reports
+  docs/             Architecture, user-story evaluation, iteration gap reports
 ```
 
 ## Architecture (summary)
@@ -37,4 +37,5 @@ pod-payroll-port/
 | **PrivatePayrollCoti** | COTI verify, encrypted roster, `spent[runId][index]` |
 | **test/lib** | Dual-chain deploy, merkle builder, `wrapCampaignFacade` async mining |
 
-Iteration 2 passes all stories with full async cross-chain claim mining (see `docs/iterations/ITERATION_02_GAPS.md`).
+Iteration 5 passes all stories with encrypted pToken ops (see `docs/iterations/ITERATION_05_GAPS.md`).  
+Story-by-story UI evaluation (native vs PoD): `docs/USER_STORIES_EVALUATION.md`.

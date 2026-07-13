@@ -9,8 +9,13 @@ import {
   isSimCotiBackend,
   podTwoWayWriteOptions,
   receiptWaitOptions,
+  runCrossChainTwoWayRoundTrip,
 } from "../../../test/system/mpc-test-utils.js";
-import { completePodOpRoundTrip } from "../../../test/tokens/test-token-utils.js";
+import {
+  completePodOpRoundTrip,
+  getDefaultCotiMineGasPodToken,
+  syncPodBalancesRoundTrip,
+} from "../../../test/tokens/test-token-utils.js";
 import { buildSablierTree, setPodMerkleContext, takeTreeByRoot, type ClaimPackage, type SablierMerkleTree } from "./merkle.js";
 import { spLog } from "./utils.js";
 import { PodPayrollBackendImpl } from "./pod-backend.js";
@@ -239,22 +244,36 @@ export async function createSablierPayrollScenario(): Promise<SablierPayrollScen
 
   const payrollFacades = new Set<string>();
 
+  async function ensureFacadeTokenIdle(facade: Address, label: string): Promise<void> {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const status = (await portalCtx.pod.read.balanceOfWithStatus([facade])) as readonly [
+        unknown,
+        boolean,
+      ];
+      if (!status[1]) return;
+      await runCrossChainTwoWayRoundTrip(podCtx, `${label}-idle-${attempt}`, {
+        gas: getDefaultCotiMineGasPodToken(),
+      });
+    }
+  }
+
   async function fundCampaignOnFacade(
     facade: Address,
     amount: bigint,
     account: Address
   ): Promise<Hex> {
-    const facadeContract = await sepoliaViem.getContractAt(FACADE_PATH, facade);
+    await ensureFacadeTokenIdle(facade, `prefund-${facade.slice(0, 10)}`);
     const itAmount = await tokenAdapterRef.buildTransferIt(account, amount);
     const fees = portalCtx.base.podTwoWayFees;
-    const hash = await (
-      facadeContract as { write: { fundCampaign: (...args: unknown[]) => Promise<Hex> } }
-    ).write.fundCampaign([itAmount, amount], {
-      account,
-      ...podTwoWayWriteOptions(fees),
-    });
+    const hash = await portalCtx.pod.write.transfer(
+      [facade, itAmount, fees.callbackFeeWei],
+      { account, ...podTwoWayWriteOptions(fees) }
+    );
     await publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
     await completePodOpRoundTrip(portalCtx, `fund-${facade.slice(0, 10)}`, async () => hash);
+    const facadeContract = await sepoliaViem.getContractAt(FACADE_PATH, facade);
+    await facadeContract.write.ackPoolCredit([amount], { account });
+    await syncPodBalancesRoundTrip(portalCtx, [facade, account], `fund-sync-${facade.slice(0, 10)}`);
     await employerWallet.sendTransaction({
       to: facade,
       value: 5n * 10n ** 18n,
@@ -287,7 +306,8 @@ export async function createSablierPayrollScenario(): Promise<SablierPayrollScen
     pTokenTransferFeeWei,
     pTokenCallbackFeeWei,
     cotiPk,
-    tokenAdapter
+    tokenAdapter,
+    ensureFacadeTokenIdle
   );
 
   const deployContractOrig = sepoliaViem.deployContract.bind(sepoliaViem);

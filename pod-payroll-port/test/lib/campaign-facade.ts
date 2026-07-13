@@ -18,6 +18,9 @@ export function wrapCampaignFacade(
   const { podCtx, claimStore } = backend;
 
   async function preparePayload(pkg: ClaimPackage, claimant: Address): Promise<void> {
+    await backend.ensureFacadeTokenIdle?.(raw.address, `preclaim-${pkg.index}`);
+    await backend.tokenAdapter.syncAccount(raw.address, `preclaim-facade-${pkg.index}`);
+    await backend.tokenAdapter.syncAccount(claimant, `preclaim-claimant-${pkg.index}`);
     const itAmount = await backend.buildItAmount(pkg.amount, "claim");
     const payoutItAmount = await backend.buildPayoutItAmount(raw.address, pkg.amount);
     const proofHandle = encodeAbiParameters(

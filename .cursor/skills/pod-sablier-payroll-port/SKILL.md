@@ -16,12 +16,12 @@ Port Sablier payroll user-story tests to PoD (`pod-payroll-port/`) without editi
 | simCOTI | `PrivatePayrollCoti`, `PodErc20CotiMother` | Encrypted roster verify, garbled pToken state |
 | Privacy Portal | **Test infra only** | Corporate treasury seed / `mint` top-ups — **payroll contracts never call portal** |
 
-## Funding model (iteration 4)
+## Funding model (iteration 5)
 
 1. **Treasury seed** — `seedCorporateTreasury(employer)` once per scenario (portal → employer pToken)
-2. **Campaign fund** — employer `token.transfer(facade, amount)` → `creditPool(amount)` + facade ETH
+2. **Campaign fund** — employer encrypted `token.transfer(facade)` → employer `ackPoolCredit(amount)` + facade ETH
 3. **Story `mint`** — treasury top-up via portal to employer (not direct to facade)
-4. **Claim payout** — facade `payoutTo` (pToken only) after COTI verify
+4. **Claim payout** — encrypted `payoutTo(itUint256)` after COTI verify
 
 ## Merkle (PoD)
 
@@ -33,18 +33,18 @@ amountCommitment = keccak256(abi.encode(ctUint256))
 
 ## Async claim path
 
-1. **Fund** — treasury pToken transfer + `creditPool` + facade ETH
-2. **Prepare** — `PodClaimStore.setPayload` with `itUint256` + `proofHandle = abi.encode(proof, index)`
-3. **Claim tx** — facade pre-checks (time, merkle, **`poolBalance`**) → vault `requestPayout` → `ClaimInstant`
-4. **Mine payroll** — COTI `verifyAndCredit(gtUint256, proofHandle)` → vault callback → `payoutTo` (`estimateFee()`)
+1. **Fund** — treasury encrypted pToken transfer + `ackPoolCredit` + facade ETH + balance sync
+2. **Prepare** — claimant `PodClaimStore.submitPayload` with verify IT + payout IT + `proofHandle`
+3. **Claim tx** — facade pre-checks → vault `requestPayout` → `ClaimInstant` (S16 same-block)
+4. **Mine payroll** — COTI `verifyAndCredit` → vault `payoutTo(itUint256)` (vault forwards inbox fee)
 5. **Mine pToken** — `mineAfterPayoutTransfer`
 6. **Sync** — `tokenAdapter.syncAccount` for decrypted story balances
 
 ### IT signing
 
-- **Claim**: `inboxCoti` + `batchProcessRequests`
+- **Claim verify**: `inboxCoti` + `batchProcessRequests`
 - **Register**: `PrivatePayrollCoti` + `registerLeaf(...)` selector
-- **pToken transfer**: per-account `prepareSimIT256` + onboard all wallets on simCOTI
+- **pToken transfer / payout / clawback**: per-account `prepareSimIT256` (facade uses registered sim key)
 
 ## Test lib map
 
@@ -52,8 +52,8 @@ amountCommitment = keccak256(abi.encode(ctUint256))
 |------|------|
 | `portal-setup.ts` | Deploy portal + pToken; `seedCorporateTreasury`, `portalDepositTo` |
 | `pod-scenario.ts` | Treasury seed, `fundFacade` via pToken transfer, facade registry |
-| `pod-token-adapter.ts` | Story ERC20 API; `mint` = treasury top-up; transfer → `onCampaignFunded` |
-| `campaign-facade.ts` | Double mine after claim |
+| `pod-token-adapter.ts` | Story ERC20 API; `mint` = treasury top-up; facade transfer → fund + `ackPoolCredit` |
+| `campaign-facade.ts` | Claimant payload + double mine; encrypted clawback wrapper |
 | `async.ts` | `mineAfterPayoutClaim` + `mineAfterPayoutTransfer` |
 
 ## Do not
@@ -64,4 +64,4 @@ amountCommitment = keccak256(abi.encode(ctUint256))
 
 ## References
 
-- Gap reports: `pod-payroll-port/docs/iterations/ITERATION_01_GAPS.md` … `ITERATION_04_GAPS.md`
+- Gap reports: `pod-payroll-port/docs/iterations/ITERATION_01_GAPS.md` … `ITERATION_05_GAPS.md`
