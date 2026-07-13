@@ -31,29 +31,93 @@ type PortalRequest = {
 
 ## Fee Helper
 
-Use the pToken on the ETH/PoD side for fee quotes.
+Quote **portal** and **PoD** fees separately, then sum for `msg.value`. Do not use `pToken.estimateFee()` or the PoD legs of `estimateDepositFees` via plain `readContract` — `tx.gasprice` is 0 in eth_call and returns zeros.
 
 ```ts
-async function quoteOnePodRequest(publicClient: any, pToken: `0x${string}`, podPTokenAbi: any) {
-  const [totalFeeWei, , callbackFeeWei] = await publicClient.readContract({
+const POD_FEE_REMOTE_CALL_SIZE = 512n;
+const POD_FEE_CALLBACK_CALL_SIZE = 512n;
+const POD_FEE_REMOTE_EXEC_GAS = 300_000n;
+const POD_FEE_CALLBACK_EXEC_GAS = 300_000n;
+
+const inboxFeeAbi = [
+  {
+    type: "function",
+    name: "calculateTwoWayFeeRequiredInLocalToken",
+    stateMutability: "view",
+    inputs: [
+      { name: "remoteMethodCallSize", type: "uint256" },
+      { name: "callBackMethodCallSize", type: "uint256" },
+      { name: "remoteMethodExecutionGas", type: "uint256" },
+      { name: "callBackMethodExecutionGas", type: "uint256" },
+      { name: "gasPrice", type: "uint256" },
+    ],
+    outputs: [
+      { name: "targetFeeLocalWei", type: "uint256" },
+      { name: "callerFeeLocalWei", type: "uint256" },
+    ],
+  },
+] as const;
+
+async function quotePodInboxFee(publicClient: any, pToken: `0x${string}`, podPTokenAbi: any) {
+  const inbox = await publicClient.readContract({
     address: pToken,
     abi: podPTokenAbi,
-    functionName: "estimateFee",
+    functionName: "inbox",
   });
-
-  return { totalFeeWei, callbackFeeWei };
+  const gasPrice = await publicClient.getGasPrice();
+  const [targetFeeWei, callbackFeeWei] = await publicClient.readContract({
+    address: inbox,
+    abi: inboxFeeAbi,
+    functionName: "calculateTwoWayFeeRequiredInLocalToken",
+    args: [
+      POD_FEE_REMOTE_CALL_SIZE,
+      POD_FEE_CALLBACK_CALL_SIZE,
+      POD_FEE_REMOTE_EXEC_GAS,
+      POD_FEE_CALLBACK_EXEC_GAS,
+      gasPrice,
+    ],
+  });
+  return { totalFeeWei: targetFeeWei + callbackFeeWei, targetFeeWei, callbackFeeWei, gasPrice };
 }
 
-async function quoteWithdrawFees(publicClient: any, pToken: `0x${string}`, podPTokenAbi: any) {
-  const transfer = await quoteOnePodRequest(publicClient, pToken, podPTokenAbi);
-  const burn = await quoteOnePodRequest(publicClient, pToken, podPTokenAbi);
+async function quotePortalFee(
+  publicClient: any,
+  portal: `0x${string}`,
+  amount: bigint,
+  privacyPortalAbi: any,
+  isDeposit: boolean
+) {
+  const fn = isDeposit ? "estimateDepositFees" : "estimateWithdrawFees";
+  const [portalFee, usedDynamicPricing] = await publicClient.readContract({
+    address: portal,
+    abi: privacyPortalAbi,
+    functionName: fn,
+    args: [amount],
+  }).then(([pf, dyn]: [bigint, boolean]) => [pf, dyn] as const);
+  return { portalFee, usedDynamicPricing };
+}
 
+async function quoteDepositFees(publicClient: any, portal: `0x${string}`, pToken: `0x${string}`, amount: bigint, privacyPortalAbi: any, podPTokenAbi: any) {
+  const { portalFee, usedDynamicPricing } = await quotePortalFee(publicClient, portal, amount, privacyPortalAbi, true);
+  const pod = await quotePodInboxFee(publicClient, pToken, podPTokenAbi);
   return {
-    transferFee: transfer.totalFeeWei,
-    transferCallbackFee: transfer.callbackFeeWei,
-    burnFee: burn.totalFeeWei,
-    burnCallbackFee: burn.callbackFeeWei,
-    totalValue: transfer.totalFeeWei + burn.totalFeeWei,
+    portalFee,
+    usedDynamicPricing,
+    mintTotalFee: pod.totalFeeWei,
+    mintCallbackFee: pod.callbackFeeWei,
+    msgValue: portalFee + pod.totalFeeWei,
+  };
+}
+
+async function quoteWithdrawFees(publicClient: any, portal: `0x${string}`, pToken: `0x${string}`, amount: bigint, privacyPortalAbi: any, podPTokenAbi: any) {
+  const { portalFee, usedDynamicPricing } = await quotePortalFee(publicClient, portal, amount, privacyPortalAbi, false);
+  const pod = await quotePodInboxFee(publicClient, pToken, podPTokenAbi);
+  return {
+    portalFee,
+    usedDynamicPricing,
+    transferTotalFee: pod.totalFeeWei,
+    transferCallbackFee: pod.callbackFeeWei,
+    msgValue: portalFee + pod.totalFeeWei,
   };
 }
 ```
@@ -101,14 +165,14 @@ async function depositPrivateToken({
     functionName: "pToken",
   });
 
-  const { totalFeeWei, callbackFeeWei } = await quoteOnePodRequest(publicClient, pToken, podPTokenAbi);
+  const fees = await quoteDepositFees(publicClient, portal, pToken, amount, privacyPortalAbi, podPTokenAbi);
 
   const hash = await walletClient.writeContract({
     address: portal,
     abi: privacyPortalAbi,
     functionName: "deposit",
-    args: [recipient, amount, callbackFeeWei],
-    value: totalFeeWei,
+    args: [recipient, amount, fees.portalFee, fees.mintCallbackFee],
+    value: fees.msgValue,
     account: user,
   });
 
@@ -202,7 +266,7 @@ async function withdrawPrivateToken({
     functionName: "pToken",
   });
 
-  const fees = await quoteWithdrawFees(publicClient, pToken, podPTokenAbi);
+  const fees = await quoteWithdrawFees(publicClient, portal, pToken, amount, privacyPortalAbi, podPTokenAbi);
   const { v, r, s } = await signWithdrawPermit({
     walletClient,
     publicClient,
@@ -222,16 +286,15 @@ async function withdrawPrivateToken({
     args: [
       recipient,
       amount,
-      fees.transferFee,
+      fees.portalFee,
+      fees.transferTotalFee,
       fees.transferCallbackFee,
-      fees.burnFee,
-      fees.burnCallbackFee,
       deadline,
       v,
       r,
       s,
     ],
-    value: fees.totalValue,
+    value: fees.msgValue,
     account: user,
   });
 
@@ -316,8 +379,8 @@ async function refreshPortalRequest({
 
 Use these ABIs by action:
 
-- Deposit: `erc20Abi` for `allowance`/`approve`, `privacyPortalAbi` for `pToken`/`deposit`/`DepositRequested`, `podPTokenAbi` for `estimateFee`.
-- Withdraw: `privacyPortalAbi` for `pToken`/`requestWithdrawWithPermit`/events, `podPTokenAbi` for `name`/`nonces`/`estimateFee`/`failedRequests`.
+- Deposit: `erc20Abi` for `allowance`/`approve`, `privacyPortalAbi` for `pToken`/`deposit`/`DepositRequested`, `podPTokenAbi` for `inbox`, inbox fee ABI for PoD quote.
+- Withdraw: `privacyPortalAbi` for `pToken`/`requestWithdrawWithPermit`/events, `podPTokenAbi` for `name`/`nonces`/`inbox`/`failedRequests`.
 - Private balance status: `podPTokenAbi` for `balanceOfWithStatus`.
 - Direct pToken transfer/approve/burn: `podPTokenAbi` only.
 - Admin burn debt: `privacyPortalAbi` for `burnDebtAmount`; admin tooling also needs the full portal ABI for `burnAccumulatedDebt`.

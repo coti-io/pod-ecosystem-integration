@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { afterEach, before, describe, it } from "node:test";
-import { network } from "hardhat";
 import { decryptUint } from "@coti-io/coti-sdk-typescript";
 import { privateKeyToAccount } from "viem/accounts";
 import { createWalletClient, custom, parseEther } from "viem";
@@ -23,11 +22,12 @@ import {
   collectInboxFeesAfterTest,
   podTwoWayWriteOptions,
 } from "./mpc-test-utils.js";
+import { connectDualChainForTests } from "../sim-coti/sim-coti-utils.js";
+import { derivePrivateKeyVariant } from "../tokens/test-token-utils.js";
 import { podConfigureKeepInbox } from "../../scripts/deploy-utils.js";
 
 describe("Millionaire (system)", { concurrency: 1 }, async function () {
-  const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
-  const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
+  const { sepoliaViem, cotiViem } = await connectDualChainForTests();
 
   let ctx: TestContext;
   let walletA: any;
@@ -57,7 +57,8 @@ describe("Millionaire (system)", { concurrency: 1 }, async function () {
     accountA = privateKeyToAccount(normalizePrivateKey(cotiPkMain) as `0x${string}`);
 
     let cotiKeyB =
-      envOrEmpty("COTI_TESTNET_PRIVATE_KEY_B") || requirePrivateKey("PRIVATE_KEY_ACCOUNT_2");
+      envOrEmpty("COTI_TESTNET_PRIVATE_KEY_B") ||
+      derivePrivateKeyVariant(normalizePrivateKey(cotiPkMain), 0x01);
     if (normalizePrivateKey(cotiKeyB).toLowerCase() === normalizePrivateKey(cotiPkMain).toLowerCase()) {
       const fallbacks = [
         process.env.PRIVATE_KEY?.trim(),

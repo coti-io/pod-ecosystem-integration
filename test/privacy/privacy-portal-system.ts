@@ -9,7 +9,6 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, before, describe, it } from "node:test";
-import { network } from "hardhat";
 import { collectInboxFeesAfterTest, logStep, podTwoWayWriteOptions } from "../system/mpc-test-utils.js";
 import {
   assertPortalWiring,
@@ -24,6 +23,7 @@ import {
   withdrawAndComplete,
   type PrivacyPortalSystemContext,
 } from "./privacy-portal-system-utils.js";
+import { connectDualChainForTests } from "../sim-coti/sim-coti-utils.js";
 
 const runPpSystem = process.env.PP_SYSTEM_TESTS === "1";
 const d = runPpSystem ? describe : describe.skip;
@@ -35,8 +35,7 @@ if (!runPpSystem) {
 }
 
 d("PrivacyPortal (Sepolia ↔ COTI system)", { concurrency: 1 }, async function () {
-  const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
-  const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
+  const { sepoliaViem, cotiViem } = await connectDualChainForTests();
 
   let ctx: PrivacyPortalSystemContext;
 

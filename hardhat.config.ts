@@ -2,6 +2,7 @@ import "dotenv/config";
 import "@nomicfoundation/hardhat-verify";
 import hardhatToolboxViemPlugin from "@nomicfoundation/hardhat-toolbox-viem";
 import { configVariable, defineConfig } from "hardhat/config";
+import simCotiPlugin from "./simCOTI/hardhat/plugin.js";
 
 const envOrConfig = (key: string) => process.env[key] ?? configVariable(key);
 const privateKeyFor = (key: string) =>
@@ -44,7 +45,7 @@ const hardhatTestAccounts = () =>
 const cotiTestnetAccounts = () => collectTestPrivateKeys();
 
 export default defineConfig({
-  plugins: [hardhatToolboxViemPlugin],
+  plugins: [hardhatToolboxViemPlugin, simCotiPlugin],
   verify: {
     etherscan: {
       apiKey: envOrConfig("ETHERSCAN_API_KEY"),
@@ -82,15 +83,70 @@ export default defineConfig({
     // Do not set `path` to soljson.js — that forces the WASM compiler, which OOMs on
     // aarch64 when compiling vendored MpcCore.sol. Let Hardhat download the native
     // linux-arm64 binary instead (see preferWasm: false).
-    version: "0.8.28",
     preferWasm: false,
-    settings: {
-      evmVersion: "cancun",
-      viaIR: true,
-      optimizer: {
-        enabled: true,
-        // Lower runs shrink deployment size (higher runtime gas). For Inbox ~29kB, try 1–200.
-        runs: 10,
+    compilers: [
+      {
+        version: "0.8.28",
+        settings: {
+          evmVersion: "cancun",
+          viaIR: true,
+          optimizer: {
+            enabled: true,
+            // Lower runs shrink deployment size (higher runtime gas). For Inbox ~29kB, try 1–200.
+            runs: 10,
+          },
+        },
+      },
+    ],
+    // COTI testnet rejects PUSH0 (shanghai); paris overrides for contracts deployed to live COTI RPC.
+    overrides: {
+      "contracts/Inbox.sol": {
+        version: "0.8.28",
+        settings: {
+          evmVersion: "paris",
+          viaIR: true,
+          optimizer: { enabled: true, runs: 10 },
+        },
+      },
+      "contracts/pod/mpc/coti-side/MpcExecutor.sol": {
+        version: "0.8.28",
+        settings: {
+          evmVersion: "paris",
+          viaIR: true,
+          optimizer: { enabled: true, runs: 10 },
+        },
+      },
+      "contracts/fee/PriceOracle.sol": {
+        version: "0.8.28",
+        settings: {
+          evmVersion: "paris",
+          viaIR: true,
+          optimizer: { enabled: true, runs: 10 },
+        },
+      },
+      "contracts/pod/token/perc20/cotiside/PodErc20CotiMother.sol": {
+        version: "0.8.28",
+        settings: {
+          evmVersion: "paris",
+          viaIR: true,
+          optimizer: { enabled: true, runs: 10 },
+        },
+      },
+      "contracts/pod/payroll-eval/coti/PrivatePayrollCoti.sol": {
+        version: "0.8.28",
+        settings: {
+          evmVersion: "paris",
+          viaIR: true,
+          optimizer: { enabled: true, runs: 10 },
+        },
+      },
+      "contracts/simCOTI/SimExtendedOperations.sol": {
+        version: "0.8.28",
+        settings: {
+          evmVersion: "cancun",
+          viaIR: true,
+          optimizer: { enabled: true, runs: 1 },
+        },
       },
     },
   },
@@ -121,6 +177,25 @@ export default defineConfig({
       chainType: "l1",
       chainId: 7082400,
       url: envOrConfig("COTI_TESTNET_RPC_URL"),
+      accounts: cotiTestnetAccounts(),
+    },
+    simCoti: {
+      type: "edr-simulated",
+      chainId: 7082401,
+      accounts: hardhatTestAccounts().length > 0 ? hardhatTestAccounts() : undefined,
+    },
+    localSepolia: {
+      type: "http",
+      chainType: "l1",
+      chainId: 31337,
+      url: process.env.SIM_SEPOLIA_RPC_URL ?? "http://127.0.0.1:8545",
+      accounts: cotiTestnetAccounts(),
+    },
+    localSimCoti: {
+      type: "http",
+      chainType: "l1",
+      chainId: 7082401,
+      url: process.env.SIM_COTI_RPC_URL ?? "http://127.0.0.1:8546",
       accounts: cotiTestnetAccounts(),
     },
     avalancheFuji: {

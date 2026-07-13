@@ -17,9 +17,36 @@ const sepolia = deployConfig.chains["11155111"] as ChainConfig;
 const fuji = deployConfig.chains["43113"] as ChainConfig;
 ```
 
-## Quote all fees (deposit)
+## Quote fees (deposit) — portal + PoD separately
 
 ```ts
+const POD_FEE_REMOTE_CALL_SIZE = 512n;
+const POD_FEE_CALLBACK_CALL_SIZE = 512n;
+const POD_FEE_REMOTE_EXEC_GAS = 300_000n;
+const POD_FEE_CALLBACK_EXEC_GAS = 300_000n;
+
+async function quotePodInboxFee(publicClient: any, pToken: `0x${string}`, podPTokenAbi: any, inboxFeeAbi: any) {
+  const inbox = await publicClient.readContract({
+    address: pToken,
+    abi: podPTokenAbi,
+    functionName: "inbox",
+  });
+  const gasPrice = await publicClient.getGasPrice();
+  const [targetFeeWei, callbackFeeWei] = await publicClient.readContract({
+    address: inbox,
+    abi: inboxFeeAbi,
+    functionName: "calculateTwoWayFeeRequiredInLocalToken",
+    args: [
+      POD_FEE_REMOTE_CALL_SIZE,
+      POD_FEE_CALLBACK_CALL_SIZE,
+      POD_FEE_REMOTE_EXEC_GAS,
+      POD_FEE_CALLBACK_EXEC_GAS,
+      gasPrice,
+    ],
+  });
+  return { totalFeeWei: targetFeeWei + callbackFeeWei, targetFeeWei, callbackFeeWei, gasPrice };
+}
+
 type DepositQuote = {
   portalFee: bigint;
   usedDynamicPricing: boolean;
@@ -31,28 +58,32 @@ type DepositQuote = {
 async function quoteDepositFees(
   publicClient: any,
   portal: `0x${string}`,
+  pToken: `0x${string}`,
   amount: bigint,
-  privacyPortalAbi: any
+  privacyPortalAbi: any,
+  podPTokenAbi: any,
+  inboxFeeAbi: any
 ): Promise<DepositQuote> {
-  const [portalFee, usedDynamicPricing, mintTotalFee, mintCallbackFee] =
-    await publicClient.readContract({
-      address: portal,
-      abi: privacyPortalAbi,
-      functionName: "estimateDepositFees",
-      args: [amount],
-    });
+  const [portalFee, usedDynamicPricing] = await publicClient.readContract({
+    address: portal,
+    abi: privacyPortalAbi,
+    functionName: "estimateDepositFees",
+    args: [amount],
+  }).then(([pf, dyn]: [bigint, boolean]) => [pf, dyn] as const);
+
+  const pod = await quotePodInboxFee(publicClient, pToken, podPTokenAbi, inboxFeeAbi);
 
   return {
     portalFee,
     usedDynamicPricing,
-    mintTotalFee,
-    mintCallbackFee,
-    msgValue: portalFee + mintTotalFee,
+    mintTotalFee: pod.totalFeeWei,
+    mintCallbackFee: pod.callbackFeeWei,
+    msgValue: portalFee + pod.totalFeeWei,
   };
 }
 ```
 
-## Quote all fees (withdraw)
+## Quote fees (withdraw) — portal + PoD separately
 
 ```ts
 type WithdrawQuote = {
@@ -66,23 +97,27 @@ type WithdrawQuote = {
 async function quoteWithdrawFees(
   publicClient: any,
   portal: `0x${string}`,
+  pToken: `0x${string}`,
   amount: bigint,
-  privacyPortalAbi: any
+  privacyPortalAbi: any,
+  podPTokenAbi: any,
+  inboxFeeAbi: any
 ): Promise<WithdrawQuote> {
-  const [portalFee, usedDynamicPricing, transferTotalFee, transferCallbackFee] =
-    await publicClient.readContract({
-      address: portal,
-      abi: privacyPortalAbi,
-      functionName: "estimateWithdrawFees",
-      args: [amount],
-    });
+  const [portalFee, usedDynamicPricing] = await publicClient.readContract({
+    address: portal,
+    abi: privacyPortalAbi,
+    functionName: "estimateWithdrawFees",
+    args: [amount],
+  }).then(([pf, dyn]: [bigint, boolean]) => [pf, dyn] as const);
+
+  const pod = await quotePodInboxFee(publicClient, pToken, podPTokenAbi, inboxFeeAbi);
 
   return {
     portalFee,
     usedDynamicPricing,
-    transferTotalFee,
-    transferCallbackFee,
-    msgValue: portalFee + transferTotalFee,
+    transferTotalFee: pod.totalFeeWei,
+    transferCallbackFee: pod.callbackFeeWei,
+    msgValue: portalFee + pod.totalFeeWei,
   };
 }
 ```
@@ -116,8 +151,15 @@ async function depositUpgraded({
   amount,
   erc20Abi,
   privacyPortalAbi,
+  podPTokenAbi,
+  inboxFeeAbi,
 }: any) {
-  const fees = await quoteDepositFees(publicClient, portal, amount, privacyPortalAbi);
+  const pToken = await publicClient.readContract({
+    address: portal,
+    abi: privacyPortalAbi,
+    functionName: "pToken",
+  });
+  const fees = await quoteDepositFees(publicClient, portal, pToken, amount, privacyPortalAbi, podPTokenAbi, inboxFeeAbi);
 
   const allowance = await publicClient.readContract({
     address: underlying,
@@ -160,8 +202,15 @@ async function depositNativeUpgraded({
   amount,
   privacyPortalAbi,
   publicClient,
+  podPTokenAbi,
+  inboxFeeAbi,
 }: any) {
-  const fees = await quoteDepositFees(publicClient, portal, amount, privacyPortalAbi);
+  const pToken = await publicClient.readContract({
+    address: portal,
+    abi: privacyPortalAbi,
+    functionName: "pToken",
+  });
+  const fees = await quoteDepositFees(publicClient, portal, pToken, amount, privacyPortalAbi, podPTokenAbi, inboxFeeAbi);
 
   const hash = await walletClient.writeContract({
     address: portal,
@@ -192,14 +241,14 @@ async function withdrawUpgraded({
   sourceChainId,
   privacyPortalAbi,
   podPTokenAbi,
+  inboxFeeAbi,
 }: any) {
   const pToken = await publicClient.readContract({
     address: portal,
     abi: privacyPortalAbi,
     functionName: "pToken",
   });
-
-  const fees = await quoteWithdrawFees(publicClient, portal, amount, privacyPortalAbi);
+  const fees = await quoteWithdrawFees(publicClient, portal, pToken, amount, privacyPortalAbi, podPTokenAbi, inboxFeeAbi);
 
   const [name, nonce] = await Promise.all([
     publicClient.readContract({ address: pToken, abi: podPTokenAbi, functionName: "name" }),

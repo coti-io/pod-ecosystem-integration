@@ -19,7 +19,7 @@ export const oracleTokensForChain = (chainId: number): OracleTokenLegs => {
   if (chainId === 43113) {
     return { localToken: FUJI_WAVAX, remoteToken: ORACLE_REMOTE_COTI_TOKEN, portalNative: FUJI_WAVAX };
   }
-  if (chainId === cotiTestnetId) {
+  if (chainId === cotiTestnetId || chainId === 7082401) {
     return { localToken: ORACLE_REMOTE_COTI_TOKEN, remoteToken: SEPOLIA_WETH, portalNative: ORACLE_REMOTE_COTI_TOKEN };
   }
   throw new Error(`Unsupported chainId ${chainId} for oracle token addresses`);

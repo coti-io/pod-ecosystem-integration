@@ -68,3 +68,4 @@ If a UI project has a newer config, prefer the app-local config over this snapsh
 - Do not infer success from source transaction status alone.
 - Do not require users to do async `approve` before withdrawal if the permit path is available.
 - Do not build normal UI flows around COTI-side contracts; use the ETH/PoD portal and pToken ABIs.
+- Do not treat `estimateDepositFees` / `estimateWithdrawFees` as a single source of truth for **total** fees — PoD inbox legs use `tx.gasprice`, which is **0** in `eth_call` / Etherscan reads. Quote **portal** and **PoD** fees separately (see `pod-pp-fee-oracle-upgrade` skill and `reference.md` § Fee Calculation).

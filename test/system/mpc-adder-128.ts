@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { afterEach, before, describe, it } from "node:test";
-import { network } from "hardhat";
 import { toFunctionSelector, zeroHash } from "viem";
 import { decryptUint } from "@coti-io/coti-sdk-typescript";
 import {
@@ -14,10 +13,10 @@ import {
   receiptWaitOptions,
 } from "./mpc-test-utils.js";
 import { mineRequest, setupContext128, type TestContext128 } from "./mpc-test-utils-128.js";
+import { connectDualChainForTests } from "../sim-coti/sim-coti-utils.js";
 
 describe("MpcAdder128 (system)", { concurrency: 1 }, async function () {
-  const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
-  const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
+  const { sepoliaViem, cotiViem } = await connectDualChainForTests();
 
   let ctx: TestContext128;
 

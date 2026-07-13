@@ -1,0 +1,21 @@
+{
+  "name": "@coti-io/sim-coti",
+  "version": "0.1.0",
+  "description": "Local COTI MPC simulator for Hardhat (fake precompile @ 0x64 + test SDK)",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./sdk/index.ts",
+    "./hardhat/plugin": "./hardhat/plugin.ts",
+    "./hardhat/injectPrecompile": "./hardhat/injectPrecompile.ts",
+    "./hardhat/injectPrecompileEthers": "./hardhat/injectPrecompileEthers.ts",
+    "./hardhat/network": "./hardhat/network.ts",
+    "./test/coti-network": "./test/coti-network.ts"
+  },
+  "scripts": {
+    "compile": "hardhat compile --config hardhat.config.ts"
+  },
+  "devDependencies": {
+    "viem": "^2.31.0"
+  }
+}

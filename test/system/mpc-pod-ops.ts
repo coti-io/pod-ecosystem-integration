@@ -15,7 +15,6 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, before, describe, it, type TestContext } from "node:test";
-import { network } from "hardhat";
 import { decryptUint } from "@coti-io/coti-sdk-typescript";
 import {
   buildEncryptedBool,
@@ -34,6 +33,7 @@ import {
   setupPodTestContext,
   type PodTestContext,
 } from "./mpc-test-utils.js";
+import { connectDualChainForTests } from "../sim-coti/sim-coti-utils.js";
 
 /**
  * First `setupPodTestContext` run redeploys COTI `MpcExecutor` once (inbox reused) so cached bytecode
@@ -90,8 +90,7 @@ function decryptU256Payload(raw: `0x${string}`, userKey: string): bigint {
 }
 
 describe("Pod MPC operations (system)", { concurrency: 1 }, async function () {
-  const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
-  const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
+  const { sepoliaViem, cotiViem } = await connectDualChainForTests();
 
   const d64 = podOpsSuiteEnabled("PodTest64") ? describe : describe.skip;
   d64("PodTest64", function () {

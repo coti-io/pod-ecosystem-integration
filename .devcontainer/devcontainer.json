@@ -1,0 +1,29 @@
+{
+  "name": "PoD Ecosystem",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/pod-ecosystem-integration",
+  "workspaceFile": "../pod-ecosystem.code-workspace",
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {},
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-azuretools.vscode-containers",
+        "ms-azuretools.vscode-docker",
+        "esbenp.prettier-vscode",
+        "NomicFoundation.hardhat-solidity"
+      ]
+    }
+  },
+  "forwardPorts": [3306],
+  "portsAttributes": {
+    "3306": {
+      "label": "MySQL",
+      "onAutoForward": "notify"
+    }
+  },
+  "remoteUser": "node"
+}

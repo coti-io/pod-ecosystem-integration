@@ -29,7 +29,7 @@ For async request lifecycle, permit signing, and polling patterns, also read the
 | Native deposit `value` | `amount + mintTotalFee` | `amount + portalFee + mintTotalFee` |
 | Withdraw args | included `burnFee`, `burnCallbackFee` | `(recipient, amount, portalFee, transferFee, transferCallbackFee, permit…)` — **no burn in user tx** |
 | Withdraw `value` | `transferFee + burnFee` | `portalFee + transferTotalFee` |
-| Fee quote source | `pToken.estimateFee()` only | `portal.estimateDepositFees` / `estimateWithdrawFees` (preferred) |
+| Fee quote source | `pToken.estimateFee()` only | **Portal:** `estimateDepositFees` / `estimateWithdrawFees` index `[0]` (portal fee only). **PoD:** inbox `calculateTwoWayFeeRequiredInLocalToken` with `getGasPrice()` |
 | Burn | user paid burn in same withdraw tx | owner/keeper calls `burnAccumulatedPTokens` separately |
 
 Portal fees can be **dynamic** when factory fee config has `percentageBps > 0` and the factory's `priceOracle` returns live USD rates.
@@ -37,7 +37,7 @@ Portal fees can be **dynamic** when factory fee config has `percentageBps > 0` a
 ## Upgrade Checklist
 
 1. **Refresh ABIs** from current `PrivacyPortal`, `PrivacyPortalFactory`, `IPodPriceOracle` (vendored under `pod-ecosystem-integration/contracts/` after `npm run link:contracts`).
-2. **Replace fee quoting** — call `portal.estimateDepositFees(amount)` or `portal.estimateWithdrawFees(amount)` instead of hand-rolling `pToken.estimateFee()` alone.
+2. **Replace fee quoting** — quote **portal fee** and **PoD inbox fee** separately; sum for `msg.value`. Do not use `pToken.estimateFee()` or the PoD legs of `portal.estimateDepositFees` via plain `readContract` (see § PoD fee pitfall below).
 3. **Add `portalFee` to writeContract args** — pass the quoted `portalFee`; set `value` to portal + PoD totals (see table above).
 4. **Remove burn fee from withdraw UI** — drop burn lines from fee breakdown and `requestWithdrawWithPermit` args; optionally show admin `pendingBurnAmount` / `estimateBatchBurnFees` for ops dashboards only.
 5. **Wire oracle display (optional)** — read `factory.priceOracle()` → `getLivePrices(nativeToken, underlying)` for live ETH/AVAX and collateral USD in the fee preview.
@@ -48,37 +48,51 @@ Portal fees can be **dynamic** when factory fee config has `percentageBps > 0` a
 Two independent fee layers; the UI sums them for `msg.value`:
 
 ```
-totalNativeFee = portalFee + podInboxFee
+totalNativeFee = portalFee + podInboxTotalFee
 ```
 
-- **Portal fee (`portalFee`)** — protocol fee retained by the portal/factory. Computed from packed fee config (`fixedFee`, `percentageBps`, `maxFee`) and live oracle rates when dynamic pricing applies.
-- **PoD inbox fee (`mintTotalFee` / `transferTotalFee`)** — native fee forwarded to the pToken async request (covers cross-chain inbox messaging). Quoted by `pToken.estimateFee()`; exposed via portal estimate helpers as `mintTotalFee` / `transferTotalFee`.
+- **Portal fee (`portalFee`)** — protocol fee retained by the portal/factory. From packed fee config (`fixedFee`, `percentageBps`, `maxFee`) and live oracle when `percentageBps > 0`. Quote via `portal.estimateDepositFees(amount)[0]` (or `[portalFee, usedDynamicPricing, ,]`).
+- **PoD inbox fee (`mintTotalFee` / `transferTotalFee`)** — native fee for the pToken async inbox request. Quote via **inbox** `calculateTwoWayFeeRequiredInLocalToken` with **current gas price**, not `pToken.estimateFee()` in a read call.
 
-**Preferred quote (single call per action):**
+### PoD fee pitfall (`tx.gasprice = 0`)
+
+`pToken.estimateFee()` (and therefore `mintTotalFee` / `transferTotalFee` inside `estimateDepositFees` / `estimateWithdrawFees`) passes **`tx.gasprice`** to the inbox. In `eth_call`, Etherscan read, and typical `readContract` calls, gas price is **0** → PoD legs show **0**. Portal fee (index 0) is still correct.
+
+**UI must quote PoD fees with an explicit gas price:**
 
 ```ts
-// Deposit
-const [portalFee, usedDynamic, mintTotalFee, mintCallbackFee] =
-  await publicClient.readContract({
-    address: portal,
-    abi: privacyPortalAbi,
-    functionName: "estimateDepositFees",
-    args: [amount],
-  });
-const msgValue = portalFee + mintTotalFee; // ERC20 deposit
-
-// Withdraw
-const [portalFee, usedDynamic, transferTotalFee, transferCallbackFee] =
-  await publicClient.readContract({
-    address: portal,
-    abi: privacyPortalAbi,
-    functionName: "estimateWithdrawFees",
-    args: [amount],
-  });
-const msgValue = portalFee + transferTotalFee;
+const gasPrice = await publicClient.getGasPrice();
+const [targetFeeWei, callbackFeeWei] = await publicClient.readContract({
+  address: inbox,
+  abi: inboxFeeAbi,
+  functionName: "calculateTwoWayFeeRequiredInLocalToken",
+  args: [512n, 512n, 300_000n, 300_000n, gasPrice],
+});
+const podTotalFee = targetFeeWei + callbackFeeWei;
 ```
 
-Pass `mintCallbackFee` / `transferCallbackFee` as the callback slice args; pass `portalFee` explicitly; set `value` to the sum above.
+Constants match `PodERC20` (`FEE_ESTIMATE_*`).
+
+### Combined quote (deposit)
+
+```ts
+const [portalFee, usedDynamic] = await publicClient.readContract({
+  address: portal,
+  abi: privacyPortalAbi,
+  functionName: "estimateDepositFees",
+  args: [amount],
+}).then(([pf, dyn]: [bigint, boolean]) => [pf, dyn] as const);
+
+const pod = await quotePodInboxFee(publicClient, pToken, podPTokenAbi);
+const msgValue = portalFee + pod.totalFeeWei; // ERC20 deposit
+// depositNative: value = amount + portalFee + pod.totalFeeWei
+```
+
+Pass `pod.callbackFeeWei` as `mintCallbackFee` / `transferCallbackFee`; pass `portalFee` explicitly.
+
+### Portal fee can be zero
+
+Factory deploy defaults are often `fixedFee = 0`, `percentageBps = 0` — portal fee stays **0** until factory owner calls `setDefaultDepositFee` / `setDefaultWithdrawFee`. Oracle presence alone does not enable dynamic fees without non-zero `percentageBps`.
 
 ### Portal fee formula (when dynamic)
 

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { afterEach, before, describe, it } from "node:test";
-import { network } from "hardhat";
 import { encodeFunctionData, stringToHex, toFunctionSelector } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
@@ -16,13 +15,13 @@ import {
   setupContext,
   type TestContext,
 } from "./mpc-test-utils.js";
+import { connectDualChainForTests } from "../sim-coti/sim-coti-utils.js";
 
 /** COTI `batchProcessRequests` gas for nested inbox `raise` (no MPC, but safe headroom). */
 const COTI_MINE_GAS_RAISE_PATH = 30_000_000n;
 
 describe("Inbox raise() → error callback (system)", { concurrency: 1 }, async function () {
-  const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
-  const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
+  const { sepoliaViem, cotiViem } = await connectDualChainForTests();
 
   let ctx: TestContext;
   let raiseCoti: any;

@@ -15,13 +15,12 @@
 
 import assert from "node:assert/strict";
 import { afterEach, before, describe, it } from "node:test";
-import { network } from "hardhat";
 import { keccak256, stringToBytes } from "viem";
-import { decryptUint } from "@coti-io/coti-sdk-typescript";
 import {
   buildEncryptedInput,
   collectInboxFeesAfterTest,
   decodeCtUint64,
+  decryptUintForBackend,
   getLatestRequest,
   getResponseRequestBySource,
   getTupleField,
@@ -32,6 +31,7 @@ import {
   setupContext,
   type TestContext,
 } from "./mpc-test-utils.js";
+import { connectDualChainForTests } from "../sim-coti/sim-coti-utils.js";
 
 /** First 4 bytes of `keccak256("EnforcedPause()")` — revert data when `receiveC` hits `whenNotPaused` while paused. */
 const ENFORCED_PAUSE_REVERT_DATA = keccak256(stringToBytes("EnforcedPause()")).slice(0, 10) as `0x${string}`;
@@ -46,8 +46,7 @@ function assertHexPrefix(actual: unknown, expectedPrefix: `0x${string}`, label: 
 }
 
 describe("MpcAdderPausable retryFailedRequest (system)", { concurrency: 1 }, async function () {
-  const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
-  const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
+  const { sepoliaViem, cotiViem } = await connectDualChainForTests();
 
   let ctx: TestContext;
 
@@ -187,7 +186,7 @@ describe("MpcAdderPausable retryFailedRequest (system)", { concurrency: 1 }, asy
       );
 
       const encryptedResult = await ctx.contracts.mpcAdder.read.resultCiphertext();
-      const decrypted = decryptUint(decodeCtUint64(encryptedResult), ctx.crypto.userKey);
+      const decrypted = decryptUintForBackend(decodeCtUint64(encryptedResult), ctx.crypto.userKey);
       assert.equal(
         decrypted,
         expectedSum,

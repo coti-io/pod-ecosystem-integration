@@ -8,7 +8,7 @@
 | `PrivacyPortalFactory` | `priceOracle`, `nativeToken`, default fee config, portal registry |
 | `PoDPriceOracle` | `getLivePrice` / `getLivePrices` for portal dynamic fees |
 | `BandLiveOracle` / `ChainlinkLiveOracle` | Low-level feed adapter (usually read via `PoDPriceOracle` only) |
-| `PodERC20` (pToken) | `estimateFee()` — PoD inbox fee component |
+| `PodERC20` (pToken) | `inbox()` + inbox `calculateTwoWayFeeRequiredInLocalToken` for PoD fee quote (not `estimateFee()` via eth_call) |
 
 Portal `pauseController` points at the factory; resolve factory via portal or config.
 
@@ -71,7 +71,9 @@ function estimateBatchBurnFees(uint256 amount) external view returns (
 );
 ```
 
-Factory-level portal fee preview (without PoD component):
+**UI quoting:** use `portalFee` from `estimateDepositFees` / `estimateWithdrawFees` (index 0). For PoD legs, call inbox `calculateTwoWayFeeRequiredInLocalToken(512, 512, 300_000, 300_000, gasPrice)` — do **not** trust `mintTotalFee` / `transferTotalFee` from portal estimates in `eth_call` (`tx.gasprice = 0`).
+
+Factory-level portal fee preview (portal component only):
 
 ```solidity
 function estimateDepositPortalFee(address underlying, uint256 amount, uint8 decimals) external view returns (uint256 fee, bool usedDynamicPricing);

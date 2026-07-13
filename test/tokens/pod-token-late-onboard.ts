@@ -6,18 +6,19 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, before, describe, it } from "node:test";
-import { network } from "hardhat";
 import { decryptUint } from "@coti-io/coti-sdk-typescript";
 import { ONBOARD_CONTRACT_ADDRESS } from "@coti-io/coti-ethers";
 import {
   collectInboxFeesAfterTest,
   decryptUint256,
+  isSimCotiBackend,
   logStep,
   normalizePrivateKey,
   onboardUser,
   podTwoWayWriteOptions,
   resolveCotiTestnetPrivateKey,
 } from "../system/mpc-test-utils.js";
+import { connectDualChainForTests, registerUserOnSim } from "../sim-coti/sim-coti-utils.js";
 import {
   completePodOpRoundTrip,
   mintOnCotiAndSync,
@@ -43,8 +44,7 @@ const CHARLIE_XOR = 0x02;
 const CHARLIE_AES_ENV = "COTI_AES_KEY_CHARLIE";
 
 d("PodERC20 late onboard (non-onboarded recipient/spender)", { concurrency: 1 }, async function () {
-  const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
-  const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
+  const { sepoliaViem, cotiViem } = await connectDualChainForTests();
 
   let ctx: PodTokenTestContext;
   let charlie: { address: `0x${string}`; privateKey: `0x${string}` };
@@ -83,9 +83,14 @@ d("PodERC20 late onboard (non-onboarded recipient/spender)", { concurrency: 1 },
   }
 
   async function onboardCharlie(): Promise<string> {
-    const cotiRpcUrl = process.env.COTI_TESTNET_RPC_URL!;
+    const cotiRpcUrl = isSimCotiBackend()
+      ? "http://127.0.0.1:8545"
+      : process.env.COTI_TESTNET_RPC_URL!;
     const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
     const userKey = await onboardUser(charlie.privateKey, cotiRpcUrl, onboardAddress, CHARLIE_AES_ENV);
+    if (isSimCotiBackend()) {
+      await registerUserOnSim(cotiViem, charlie.address, userKey);
+    }
     charlieUserKey = userKey;
     lo("onboarded Charlie on COTI");
     return userKey;

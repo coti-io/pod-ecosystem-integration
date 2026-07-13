@@ -20,30 +20,31 @@ import { before, describe, it } from "node:test";
 import { network } from "hardhat";
 import { defineChain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { receiptWaitOptions } from "./mpc-test-utils.js";
+import { isSimCotiBackend, receiptWaitOptions, resolveCotiNetworkName } from "./mpc-test-utils.js";
+import { injectSimCotiPrecompile, MPC_PRECOMPILE } from "../../simCOTI/hardhat/injectPrecompile.js";
+import { aesKeyToBigInt, deriveSimAesKey } from "../../simCOTI/sdk/index.js";
 
 const MOD_256 = 1n << 256n;
 const cotiReceiptWaitOptions = { ...receiptWaitOptions, timeout: 900_000 };
-
-/**
- * Some COTI RPCs fail `eth_estimateGas` on heavy `mul256` txs; a modest explicit cap avoids that.
- * Keep limits low enough that `gas * gasPrice` fits typical testnet wallets (very high caps can exceed balance).
- */
-/** COTI `mul256` can exceed 15M gas; override with `MPC_COTI_MUL256_GAS` if needed. */
-const GAS_MPC_MUL256 = process.env.MPC_COTI_MUL256_GAS?.trim()
-  ? BigInt(process.env.MPC_COTI_MUL256_GAS.trim())
-  : 50_000_000n;
-const GAS_MPC_MUL128 = 12_000_000n;
-
-function mod256Mul(a: bigint, b: bigint): bigint {
-  return (a * b) % MOD_256;
-}
 
 const cotiRpc = process.env.COTI_TESTNET_RPC_URL?.trim();
 const cotiPkRaw =
   process.env.COTI_TESTNET_PRIVATE_KEY?.trim() || process.env.PRIVATE_KEY?.trim();
 
-const canRunCoti = Boolean(cotiRpc && cotiPkRaw);
+const simMode = isSimCotiBackend();
+const canRunCoti = simMode || Boolean(cotiRpc && cotiPkRaw);
+
+/** COTI `mul256` can exceed 15M gas on live testnet; simCoti EDR caps block gas at 16M. */
+const GAS_MPC_MUL256 = simMode
+  ? undefined
+  : process.env.MPC_COTI_MUL256_GAS?.trim()
+    ? BigInt(process.env.MPC_COTI_MUL256_GAS.trim())
+    : 50_000_000n;
+const GAS_MPC_MUL128 = simMode ? undefined : 12_000_000n;
+
+function mod256Mul(a: bigint, b: bigint): bigint {
+  return (a * b) % MOD_256;
+}
 
 const deployGasOpt = (() => {
   const raw = process.env.MPC_COTI_CONTRACT_DEPLOY_GAS?.trim();
@@ -55,20 +56,26 @@ const deployGas = "gas" in deployGasOpt ? deployGasOpt.gas : undefined;
 describe("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 }, async function () {
   if (!canRunCoti) {
     it.skip(
-      "set COTI_TESTNET_RPC_URL and COTI_TESTNET_PRIVATE_KEY (or PRIVATE_KEY) to run this file",
+      "set COTI_TESTNET_RPC_URL and COTI_TESTNET_PRIVATE_KEY (or PRIVATE_KEY), or COTI_BACKEND=sim",
       () => {}
     );
     return;
   }
 
-  const { viem } = await network.connect({ network: "cotiTestnet" });
-  const cotiChainId = Number.parseInt(process.env.COTI_TESTNET_CHAIN_ID ?? "7082400", 10);
+  const cotiNetwork = resolveCotiNetworkName();
+  const { viem } = await network.connect({ network: cotiNetwork });
+  if (simMode) {
+    await injectSimCotiPrecompile(viem);
+  }
+  const cotiChainId = simMode
+    ? 7082401
+    : Number.parseInt(process.env.COTI_TESTNET_CHAIN_ID ?? "7082400", 10);
   const cotiChain = defineChain({
     id: cotiChainId,
-    name: "COTI Testnet",
+    name: simMode ? "simCoti" : "COTI Testnet",
     nativeCurrency: { name: "COTI", symbol: "COTI", decimals: 18 },
     rpcUrls: {
-      default: { http: [cotiRpc!] },
+      default: { http: [simMode ? "http://127.0.0.1:8545" : cotiRpc!] },
     },
   });
   const pkHex = (cotiPkRaw!.startsWith("0x") ? cotiPkRaw : `0x${cotiPkRaw}`) as `0x${string}`;
@@ -83,6 +90,12 @@ describe("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 },
   let nextNonce: number | undefined;
 
   const txOpts = async (gas?: bigint) => {
+    if (simMode) {
+      return {
+        account: wallet.account,
+        ...(gas === undefined ? {} : { gas }),
+      } as const;
+    }
     const gasPrice = await publicClient.getGasPrice();
     if (nextNonce === undefined) {
       nextNonce = await publicClient.getTransactionCount({
@@ -156,6 +169,12 @@ describe("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 },
         ),
       deployGas
     );
+
+    if (simMode) {
+      const userKey = deriveSimAesKey(pkHex, cotiChainId);
+      const simOps = await viem.getContractAt("SimExtendedOperations", MPC_PRECOMPILE);
+      await simOps.write.simRegisterUserKey([harness.address, aesKeyToBigInt(userKey)]);
+    }
   }, { timeout: 900_000 });
 
   const cOwner = () => harness.address;

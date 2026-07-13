@@ -44,26 +44,117 @@ Do not assume request ids can be predicted client-side.
 
 ## Fee Calculation
 
-Every pToken request needs ETH/source-chain native fee.
+User-facing actions pay **two independent native-fee layers**. Always quote and display them separately, then sum for `msg.value`.
 
-Use pToken:
-
-```solidity
-estimateFee() returns (uint256 totalFeeWei, uint256 targetFeeWei, uint256 callbackFeeWei)
+```
+totalNativeFee = portalFee + podInboxTotalFee
 ```
 
-Use:
+| Layer | What it pays for | Who receives it | How to quote (UI) |
+|-------|------------------|-----------------|-------------------|
+| **Portal fee** (`portalFee`) | Privacy Portal protocol fee on deposit/withdraw | Portal → factory `feeRecipient` via `withdrawPortalFees` | `portal.estimateDepositFees(amount)[0]` or `estimateWithdrawFees(amount)[0]`; or `factory.estimateDepositPortalFee(underlying, amount, decimals)` |
+| **PoD inbox fee** (`mintTotalFee` / `transferTotalFee`) | Cross-chain inbox messaging for the pToken async request | Forwarded to inbox via `pToken.mint` / `transferFromAndCallWithPermit` | **Inbox** `calculateTwoWayFeeRequiredInLocalToken(...)` with **current gas price** (see below) |
 
-- `totalFeeWei` as the PoD fee forwarded in the same portal tx.
-- `callbackFeeWei` as the callback-fee argument.
+Callback slices (`mintCallbackFee`, `transferCallbackFee`) are the **callback leg** of the PoD fee (`callerFeeLocalWei`); pass them as the callback args on portal writes.
 
-Portal protocol fees are separate. Use portal views:
+### Do not rely on portal estimate helpers for PoD fees alone
 
-```solidity
-estimateDepositFees(amount) -> (portalFee, usedDynamicPricing, mintTotalFee, mintCallbackFee)
-estimateWithdrawFees(amount) -> (portalFee, usedDynamicPricing, transferTotalFee, transferCallbackFee)
-estimateBatchBurnFees(amount) -> (burnTotalFee, burnCallbackFee)  // keeper/admin only
+`estimateDepositFees` / `estimateWithdrawFees` internally call `pToken.estimateFee()`, which passes **`tx.gasprice`** to the inbox fee formula. In `eth_call`, Etherscan “Read Contract”, and most `readContract` paths, **`tx.gasprice` is 0**, so `mintTotalFee` and `mintCallbackFee` return **0** even when real txs require non-zero ETH.
+
+**Portal fee** from those helpers is still valid (oracle + packed config; does not use `tx.gasprice`).
+
+**PoD fee** must be quoted separately:
+
+```ts
+// PodERC20 estimate constants (contracts/pod/token/perc20/PodERC20.sol)
+const POD_FEE_REMOTE_CALL_SIZE = 512n;
+const POD_FEE_CALLBACK_CALL_SIZE = 512n;
+const POD_FEE_REMOTE_EXEC_GAS = 300_000n;
+const POD_FEE_CALLBACK_EXEC_GAS = 300_000n;
+
+async function quotePodInboxFee(publicClient: any, pToken: `0x${string}`, podPTokenAbi: any, inboxFeeAbi: any) {
+  const inbox = await publicClient.readContract({
+    address: pToken,
+    abi: podPTokenAbi,
+    functionName: "inbox",
+  });
+  const gasPrice = await publicClient.getGasPrice();
+  const [targetFeeWei, callbackFeeWei] = await publicClient.readContract({
+    address: inbox,
+    abi: inboxFeeAbi,
+    functionName: "calculateTwoWayFeeRequiredInLocalToken",
+    args: [
+      POD_FEE_REMOTE_CALL_SIZE,
+      POD_FEE_CALLBACK_CALL_SIZE,
+      POD_FEE_REMOTE_EXEC_GAS,
+      POD_FEE_CALLBACK_EXEC_GAS,
+      gasPrice,
+    ],
+  });
+  return {
+    totalFeeWei: targetFeeWei + callbackFeeWei,
+    targetFeeWei,
+    callbackFeeWei,
+    gasPrice,
+  };
+}
 ```
+
+### Combined deposit quote (ERC20)
+
+```ts
+async function quoteDeposit(publicClient: any, portal: `0x${string}`, pToken: `0x${string}`, amount: bigint, abis: any) {
+  const [portalFee, usedDynamicPricing] = await publicClient.readContract({
+    address: portal,
+    abi: abis.privacyPortalAbi,
+    functionName: "estimateDepositFees",
+    args: [amount],
+  }).then(([pf, dyn]: [bigint, boolean]) => [pf, dyn] as const);
+
+  const pod = await quotePodInboxFee(publicClient, pToken, abis.podPTokenAbi, abis.inboxFeeAbi);
+
+  return {
+    portalFee,
+    usedDynamicPricing,
+    mintTotalFee: pod.totalFeeWei,
+    mintCallbackFee: pod.callbackFeeWei,
+    msgValue: portalFee + pod.totalFeeWei, // ERC20 deposit
+  };
+}
+```
+
+Native-wrapped deposit: `msgValue = amount + portalFee + mintTotalFee`.
+
+### Combined withdraw quote
+
+```ts
+async function quoteWithdraw(publicClient: any, portal: `0x${string}`, pToken: `0x${string}`, amount: bigint, abis: any) {
+  const [portalFee, usedDynamicPricing] = await publicClient.readContract({
+    address: portal,
+    abi: abis.privacyPortalAbi,
+    functionName: "estimateWithdrawFees",
+    args: [amount],
+  }).then(([pf, dyn]: [bigint, boolean]) => [pf, dyn] as const);
+
+  const pod = await quotePodInboxFee(publicClient, pToken, abis.podPTokenAbi, abis.inboxFeeAbi);
+
+  return {
+    portalFee,
+    usedDynamicPricing,
+    transferTotalFee: pod.totalFeeWei,
+    transferCallbackFee: pod.callbackFeeWei,
+    msgValue: portalFee + pod.totalFeeWei,
+  };
+}
+```
+
+Withdraw has **no inline burn** in the user tx; batch burn is a separate keeper/admin call (`burnAccumulatedPTokens`).
+
+### Portal fee config (why portal fee can be zero)
+
+Factory defaults are packed `(fixedFee, percentageBps, maxFee)`. Deploy scripts default to **`fixedFee = 0` and `percentageBps = 0`** unless overridden — then portal fee is **0** regardless of oracle. Dynamic pricing applies only when `percentageBps > 0` and oracle rates are non-zero.
+
+Per-portal overrides: `setDepositFee` / `setWithdrawFee` on portal owner; `getFeeConfig(isDeposit)` for display.
 
 ### USD oracle (PoDPriceOracle + live adapter)
 
@@ -87,16 +178,16 @@ Configuration (`deployConfig.chains[chainId].oracle`):
 
 Live upgrade: deploy new adapter + `PoDPriceOracle`, seed feeds, `inbox.setPriceOracle` + `factory.setPriceOracle`.
 
-Deposit (one pToken mint + portal fee):
+Deposit (portal fee + PoD mint fee):
 
-- ERC20: `deposit(recipient, amount, portalFee, mintCallbackFee)` with `value = mintTotalFee + portalFee`. User must `approve` the portal first.
-- Native-wrapped (WETH/WAVAX): `depositNative(recipient, amount, portalFee, mintCallbackFee)` with `value = amount + mintTotalFee + portalFee`. No separate wrap tx.
+- ERC20: `deposit(recipient, amount, portalFee, mintCallbackFee)` with `value = portalFee + mintTotalFee`. User must `approve` the portal first.
+- Native-wrapped (WETH/WAVAX): `depositNative(recipient, amount, portalFee, mintCallbackFee)` with `value = amount + portalFee + mintTotalFee`. No separate wrap tx.
 
 Check `nativeWrappedUnderlying()` to pick the deposit path.
 
-Withdraw (one pToken transfer + portal fee; **no inline burn**):
+Withdraw (portal fee + PoD transfer fee; **no inline burn**):
 
-- `requestWithdrawWithPermit(recipient, amount, portalFee, transferFee, transferCallbackFee, permit...)` with `value = transferTotalFee + portalFee`.
+- `requestWithdrawWithPermit(recipient, amount, portalFee, transferFee, transferCallbackFee, permit...)` with `value = portalFee + transferTotalFee`.
 - After release, pTokens stay in portal custody until the portal owner runs `burnAccumulatedPTokens(amount, burnCallbackFee)` with `value = burnTotalFee` (separate keeper tx).
 
 Native-wrapped portals release **wrapped ERC20** (WETH/WAVAX) on withdraw; they do not unwrap to native coin in the portal.
@@ -115,9 +206,9 @@ Reads:
 
 Writes:
 
-- `deposit(address recipient, uint256 amount, uint256 mintCallbackFee) payable -> bytes32 requestId`
-- `depositNative(address recipient, uint256 amount, uint256 mintCallbackFee) payable -> bytes32 requestId` — only when `nativeWrappedUnderlying`; wraps `amount` via WETH/WAVAX `deposit()`, then mints pTokens.
-- `requestWithdrawWithPermit(address recipient, uint256 amount, uint256 transferFee, uint256 transferCallbackFee, uint256 burnFee, uint256 burnCallbackFee, uint256 permitDeadline, uint8 v, bytes32 r, bytes32 s) payable -> (bytes32 withdrawalId, bytes32 transferRequestId)`
+- `deposit(address recipient, uint256 amount, uint256 portalFee, uint256 mintCallbackFee) payable -> bytes32 requestId`
+- `depositNative(address recipient, uint256 amount, uint256 portalFee, uint256 mintCallbackFee) payable -> bytes32 requestId` — only when `nativeWrappedUnderlying`; wraps `amount` via WETH/WAVAX `deposit()`, then mints pTokens.
+- `requestWithdrawWithPermit(address recipient, uint256 amount, uint256 portalFee, uint256 transferFee, uint256 transferCallbackFee, uint256 permitDeadline, uint8 v, bytes32 r, bytes32 s) payable -> (bytes32 withdrawalId, bytes32 transferRequestId)`
 
 Withdraw release: when `nativeWrappedUnderlying`, the portal calls `underlying.withdraw(amount)` and sends native coin to the recipient; otherwise it transfers the ERC20.
 
@@ -221,17 +312,23 @@ export const privacyPortalAbi = [
   { type: "function", name: "underlyingToken", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   { type: "function", name: "pToken", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
+  { type: "function", name: "estimateDepositFees", stateMutability: "view", inputs: [{ type: "uint256", name: "amount" }], outputs: [
+    { type: "uint256" }, { type: "bool" }, { type: "uint256" }, { type: "uint256" }
+  ] },
+  { type: "function", name: "estimateWithdrawFees", stateMutability: "view", inputs: [{ type: "uint256", name: "amount" }], outputs: [
+    { type: "uint256" }, { type: "bool" }, { type: "uint256" }, { type: "uint256" }
+  ] },
   { type: "function", name: "burnDebtAmount", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "withdrawals", stateMutability: "view", inputs: [{ type: "bytes32" }], outputs: [
     { type: "address" }, { type: "address" }, { type: "uint256" }, { type: "uint256" },
     { type: "uint256" }, { type: "bytes32" }, { type: "bytes32" }, { type: "uint8" }
   ] },
   { type: "function", name: "deposit", stateMutability: "payable", inputs: [
-    { type: "address" }, { type: "uint256" }, { type: "uint256" }
+    { type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }
   ], outputs: [{ type: "bytes32" }] },
   { type: "function", name: "requestWithdrawWithPermit", stateMutability: "payable", inputs: [
     { type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" },
-    { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint8" },
+    { type: "uint256" }, { type: "uint256" }, { type: "uint8" },
     { type: "bytes32" }, { type: "bytes32" }
   ], outputs: [{ type: "bytes32" }, { type: "bytes32" }] },
   { type: "event", name: "DepositRequested", inputs: [
@@ -266,6 +363,7 @@ export const podPTokenAbi = [
   { type: "function", name: "symbol", stateMutability: "view", inputs: [], outputs: [{ type: "string" }] },
   { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
   { type: "function", name: "nonces", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "inbox", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   { type: "function", name: "failedRequests", stateMutability: "view", inputs: [{ type: "bytes32" }], outputs: [{ type: "bytes" }] },
   { type: "function", name: "estimateFee", stateMutability: "view", inputs: [], outputs: [
     { name: "totalFeeWei", type: "uint256" },

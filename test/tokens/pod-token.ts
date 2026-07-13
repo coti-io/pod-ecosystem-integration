@@ -12,9 +12,9 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, before, describe, it } from "node:test";
-import { network } from "hardhat";
 import { decodeAbiParameters, encodeFunctionData } from "viem";
 import { logStep } from "../system/mpc-test-utils.js";
+import { connectDualChainForTests } from "../sim-coti/sim-coti-utils.js";
 import {
   assertIncludesInsensitive,
   completePodOpRoundTrip,
@@ -49,8 +49,7 @@ if (!runPodTokenSystem) {
 const pt = (message: string) => logStep(`pod-token: ${message}`);
 
 d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
-  const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
-  const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
+  const { sepoliaViem, cotiViem } = await connectDualChainForTests();
 
   let ctx: PodTokenTestContext;
 
@@ -156,6 +155,8 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     const start = 5_000n;
     const ownerToBob = 100n;
     const bobToOwner = 50n;
+    const ownerBefore = await readDecryptedBalance(ctx, ctx.owner);
+    const bobBefore = await readDecryptedBalance(ctx, ctx.bob.address);
     pt(`case receiver not locked: fund owner=${start} bob=${start}`);
     await mintOnCotiAndSync(ctx, [
       { address: ctx.owner, amount: start },
@@ -176,7 +177,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     pt("case receiver not locked: bob -> owner should succeed while owner->bob is in flight");
 
     const itBobSend = await encryptAmount(ctx, bobToOwner);
-    const bobTx = await ctx.podAsCoti.write.transfer(
+    const bobTx = await ctx.podAsBob.write.transfer(
       [ctx.owner, itBobSend, ctx.base.podTwoWayFees.callbackFeeWei],
       podTwoWayWriteOptions(ctx.base.podTwoWayFees)
     );
@@ -188,8 +189,8 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     await mineLatestOutboundRoundTrip(ctx, "recvNotLockedMine1");
     await mineLatestOutboundRoundTrip(ctx, "recvNotLockedMine2");
 
-    assert.equal(await readDecryptedBalance(ctx, ctx.owner), start - ownerToBob + bobToOwner);
-    assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), start + ownerToBob - bobToOwner);
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerBefore + start - ownerToBob + bobToOwner);
+    assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), bobBefore + start + ownerToBob - bobToOwner);
     pt("case receiver not locked: done");
   });
 

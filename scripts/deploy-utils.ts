@@ -226,7 +226,7 @@ export const oracleUsdPricesForChain = (chainId: number): OracleUsdLegs => {
   if (chainId === AVALANCHE_FUJI_CHAIN_ID) {
     return { localUsd18: avax, remoteUsd18: coti };
   }
-  if (chainId === cotiTestnetId) {
+  if (chainId === cotiTestnetId || chainId === 7082401) {
     return { localUsd18: coti, remoteUsd18: eth };
   }
   throw new Error(
