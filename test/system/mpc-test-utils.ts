@@ -1146,6 +1146,7 @@ export const setupContext = async (params: {
 
   if (simMode) {
     await injectSimCotiPrecompile(params.cotiViem);
+    await injectSimCotiPrecompile(params.sepoliaViem);
   }
 
   const cotiRpcUrl = simMode ? "http://127.0.0.1:8545" : requireEnv("COTI_TESTNET_RPC_URL");
@@ -1389,6 +1390,7 @@ export const setupContextWideMpc = async (
 
   if (simMode) {
     await injectSimCotiPrecompile(params.cotiViem);
+    await injectSimCotiPrecompile(params.sepoliaViem);
   }
 
   const cotiRpcUrl = simMode ? "http://127.0.0.1:8545" : requireEnv("COTI_TESTNET_RPC_URL");
@@ -1705,6 +1707,7 @@ export const setupPodTestContext = async (params: {
 
   if (simMode) {
     await injectSimCotiPrecompile(params.cotiViem);
+    await injectSimCotiPrecompile(params.sepoliaViem);
   }
 
   const cotiRpcUrl = simMode ? "http://127.0.0.1:8545" : requireEnv("COTI_TESTNET_RPC_URL");

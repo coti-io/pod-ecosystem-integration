@@ -38,13 +38,9 @@ PayrollCampaignFacade.payoutTo(itUint256) → employee
 
 - **S16** — event ABI/assertion uses `amountCommitment` instead of plaintext `amount` (only on-chain surface that still reflected salary; now commitment-only).
 
-## Remaining gaps
+## Remaining gaps (superseded by iteration 07)
 
-| Gap | Notes |
-|-----|--------|
-| Facade `validateCiphertext` on `claim` | Skipped on AVAX sim — sim `ValidateCiphertext` fails for facade selector; amount enforced on COTI `verifyAndCredit` |
-| S22 sync underfund | Client-side decrypted balance check in `preparePayload`; production UI should compare decrypted facade balance before submit |
-| On-chain encrypted pool `ge` | MPC compare between `balanceOf` ct and claimant IT not reliable in sim; defer to COTI + pToken payout |
+See `ITERATION_07_GAPS.md` for encrypted pool ledger, facade `validateCiphertext`, and on-chain S22.
 
 ## Commands
 

@@ -186,27 +186,46 @@ export function deriveUserAesKey(
 
 /** Register a user's AES key on the sim precompile (required before ValidateCiphertext). */
 export async function registerUserOnSim(
-  cotiViem: SimCotiNetworks["cotiViem"],
+  viem: SimCotiNetworks["cotiViem"],
   userAddress: `0x${string}`,
   aesKey: string | bigint,
   signerAccount?: PrivateKeyAccount
 ): Promise<void> {
   const keyBigInt = typeof aesKey === "bigint" ? aesKey : aesKeyToBigInt(aesKey);
-  const sim = await cotiViem.getContractAt("SimExtendedOperations", MPC_PRECOMPILE);
-  const account = signerAccount ?? (await cotiViem.getWalletClients())[0].account;
+  const sim = await viem.getContractAt("SimExtendedOperations", MPC_PRECOMPILE);
+  const account = signerAccount ?? (await viem.getWalletClients())[0].account;
   await sim.write.simRegisterUserKey([userAddress, keyBigInt], { account });
 }
 
-/** Derive AES key and register it on simCoti for the given private key. */
+/** Register the same AES key on both sim chains (AVAX surrogate + simCOTI). */
+export async function registerUserOnDualSim(
+  sepoliaViem: SimCotiNetworks["sepoliaViem"],
+  cotiViem: SimCotiNetworks["cotiViem"],
+  userAddress: `0x${string}`,
+  aesKey: string | bigint,
+  signerAccount?: PrivateKeyAccount
+): Promise<void> {
+  await registerUserOnSim(cotiViem, userAddress, aesKey, signerAccount);
+  if (isSimCotiBackend()) {
+    await registerUserOnSim(sepoliaViem, userAddress, aesKey, signerAccount);
+  }
+}
+
+/** Derive AES key and register it on simCOTI (+ AVAX surrogate when sim backend). */
 export async function onboardSimUser(
   cotiViem: SimCotiNetworks["cotiViem"],
   privateKey: Hex | string,
-  signerAccount?: PrivateKeyAccount
+  signerAccount?: PrivateKeyAccount,
+  sepoliaViem?: SimCotiNetworks["sepoliaViem"]
 ): Promise<{ userKey: string; address: `0x${string}` }> {
   const pk = (privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`) as Hex;
   const account = signerAccount ?? privateKeyToAccount(pk);
   const userKey = deriveUserAesKey(pk);
-  await registerUserOnSim(cotiViem, account.address, userKey, account);
+  if (sepoliaViem && isSimCotiBackend()) {
+    await registerUserOnDualSim(sepoliaViem, cotiViem, account.address, userKey, account);
+  } else {
+    await registerUserOnSim(cotiViem, account.address, userKey, account);
+  }
   return { userKey, address: account.address };
 }
 

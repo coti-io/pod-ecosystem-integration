@@ -1,7 +1,7 @@
 import type { Address, Hex, PublicClient, WalletClient } from "viem";
 import { createWalletClient, custom, bytesToHex } from "viem";
 import { mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
-import { connectDualChainForTests, onboardSimUser, registerUserOnSim } from "../../../test/sim-coti/sim-coti-utils.js";
+import { connectDualChainForTests, onboardSimUser, registerUserOnDualSim, registerUserOnSim } from "../../../test/sim-coti/sim-coti-utils.js";
 import {
   fundContractForInboxFees,
   setupContext,
@@ -121,22 +121,26 @@ async function walletForMnemonicIndex(
 }
 
 async function onboardByAddress(
+  sepoliaViem: Awaited<ReturnType<typeof connectDualChainForTests>>["sepoliaViem"],
   cotiViem: Awaited<ReturnType<typeof connectDualChainForTests>>["cotiViem"],
   address: Address,
   userKeys: Map<string, string>,
   cotiFunderWallet: WalletClient
 ): Promise<void> {
   const lower = address.toLowerCase();
-  if (userKeys.has(lower)) return;
   const pk = privateKeyForAddress(address);
-  const inEnv = collectHardhatPrivateKeys().some(
-    (k) => privateKeyToAccount(k).address.toLowerCase() === lower
-  );
-  if (!inEnv && isSimCotiBackend()) {
-    await cotiFunderWallet.sendTransaction({ to: address, value: 2n * 10n ** 18n });
+  if (!userKeys.has(lower)) {
+    const inEnv = collectHardhatPrivateKeys().some(
+      (k) => privateKeyToAccount(k).address.toLowerCase() === lower
+    );
+    if (!inEnv && isSimCotiBackend()) {
+      await cotiFunderWallet.sendTransaction({ to: address, value: 2n * 10n ** 18n });
+    }
+    const { userKey } = await onboardSimUser(cotiViem, pk, undefined, sepoliaViem);
+    userKeys.set(lower, userKey);
+  } else if (isSimCotiBackend()) {
+    await registerUserOnSim(sepoliaViem, address, userKeys.get(lower)!);
   }
-  const { userKey } = await onboardSimUser(cotiViem, pk);
-  userKeys.set(lower, userKey);
 }
 
 export async function createSablierPayrollScenario(): Promise<SablierPayrollScenario> {
@@ -189,6 +193,9 @@ export async function createSablierPayrollScenario(): Promise<SablierPayrollScen
 
   const userKeys = new Map<string, string>();
   userKeys.set(cotiOwner.toLowerCase(), podCtx.crypto.userKey);
+  if (isSimCotiBackend()) {
+    await registerUserOnDualSim(sepoliaViem, cotiViem, cotiOwner, podCtx.crypto.userKey);
+  }
 
   const cotiPayroll = await cotiViem.deployContract(
     "contracts/pod-payroll-port/coti/PrivatePayrollCoti.sol:PrivatePayrollCoti",
@@ -230,9 +237,9 @@ export async function createSablierPayrollScenario(): Promise<SablierPayrollScen
     { account: admin.address }
   );
 
-  await onboardByAddress(cotiViem, employer.address, userKeys, podCtx.coti.wallet);
+  await onboardByAddress(sepoliaViem, cotiViem, employer.address, userKeys, podCtx.coti.wallet);
   for (const acct of [alice, bob, carol]) {
-    await onboardByAddress(cotiViem, acct.address, userKeys, podCtx.coti.wallet);
+    await onboardByAddress(sepoliaViem, cotiViem, acct.address, userKeys, podCtx.coti.wallet);
   }
 
   await employerWallet.sendTransaction({
@@ -257,6 +264,9 @@ export async function createSablierPayrollScenario(): Promise<SablierPayrollScen
     }
   }
 
+  let tokenAdapterRef!: ReturnType<typeof createPayrollTokenAdapter>;
+  let podBackendRef!: PodPayrollBackendImpl;
+
   async function fundCampaignOnFacade(
     facade: Address,
     amount: bigint,
@@ -272,14 +282,18 @@ export async function createSablierPayrollScenario(): Promise<SablierPayrollScen
     await publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
     await completePodOpRoundTrip(portalCtx, `fund-${facade.slice(0, 10)}`, async () => hash);
     await syncPodBalancesRoundTrip(portalCtx, [facade, account], `fund-sync-${facade.slice(0, 10)}`);
+    const ackIt = await podBackendRef.buildAckPoolIt(facade, account, amount);
+    const facadeContract = await sepoliaViem.getContractAt(FACADE_PATH, facade);
+    await facadeContract.write.ackPoolCredit(
+      [[ackIt.ciphertext, ackIt.signature]],
+      { account }
+    );
     await employerWallet.sendTransaction({
       to: facade,
       value: 5n * 10n ** 18n,
     });
     return hash;
   }
-
-  let tokenAdapterRef!: ReturnType<typeof createPayrollTokenAdapter>;
 
   const tokenAdapter = createPayrollTokenAdapter({
     portalCtx,
@@ -307,6 +321,7 @@ export async function createSablierPayrollScenario(): Promise<SablierPayrollScen
     tokenAdapter,
     ensureFacadeTokenIdle
   );
+  podBackendRef = podBackend;
 
   const deployContractOrig = sepoliaViem.deployContract.bind(sepoliaViem);
 
@@ -337,7 +352,7 @@ export async function createSablierPayrollScenario(): Promise<SablierPayrollScen
   }
 
   async function fundFacade(facade: CampaignContract, amount: bigint): Promise<void> {
-    await registerUserOnSim(cotiViem, facade.address, podCtx.crypto.userKey);
+    await registerUserOnDualSim(sepoliaViem, cotiViem, facade.address, podCtx.crypto.userKey);
     userKeys.set(facade.address.toLowerCase(), podCtx.crypto.userKey);
     payrollFacades.add(facade.address.toLowerCase());
     await tokenAdapter.token.write.transfer([facade.address, amount], {
@@ -393,7 +408,7 @@ export async function createSablierPayrollScenario(): Promise<SablierPayrollScen
       await registerPodCampaign(facade as CampaignContract, tree, actualRunId);
     }
 
-    await registerUserOnSim(cotiViem, facade.address, podCtx.crypto.userKey);
+    await registerUserOnDualSim(sepoliaViem, cotiViem, facade.address, podCtx.crypto.userKey);
     userKeys.set(facade.address.toLowerCase(), podCtx.crypto.userKey);
     payrollFacades.add(facade.address.toLowerCase());
 

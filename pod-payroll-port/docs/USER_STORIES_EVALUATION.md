@@ -20,14 +20,15 @@ Phase 2 port: `pod-payroll-port/` (PoD + simCOTI).
 
 | User need | Native | PoD | Truly private? |
 |-----------|--------|-----|----------------|
-| Employer funds campaign | Public ERC20 transfer | Encrypted pToken + `ackPoolCredit` | **Partial** — transfer encrypted; pool credit plaintext |
-| Employee sees salary | Plaintext in merkle + claim calldata | Plaintext claim calldata + encrypted COTI verify | **Partial** — amount in `claim()` is public (Sablier API); merkle uses `amountCommitment` |
+| Employer funds campaign | Public ERC20 transfer | Encrypted pToken + encrypted `ackPoolCredit` IT | **Yes** — transfer + pool ledger are ciphertext / IT |
+| Employee sees salary | Plaintext in merkle + claim calldata | `itUint256` claim calldata + encrypted COTI verify | **Yes** — merkle uses `amountCommitment`; claim amount is IT |
 | Employee gets paid | Sync public ERC20 | Async encrypted pToken payout | **Yes** — COTI balances are ciphertext |
-| Activity feed (S16) | `ClaimInstant` with public amount | Same event shape | **No** — index, recipient, amount public by design |
+| Activity feed (S16) | `ClaimInstant` with public amount | `ClaimInstant` with `amountCommitment` | **Partial** — index/recipient public; amount is commitment hash only |
 | Move funds after pay (S28–31) | Public ERC20 | Encrypted pToken + decrypt in adapter | **Yes** — if UI uses encrypted paths |
 | Employer treasury | Mock `mint` | Privacy Portal deposit (test infra) | **Yes** for balances; portal is separate UI |
+| Underfund guard (S22) | Sync `balanceOf` check | On-chain encrypted pool `ge` (`_deductPool`) | **Yes** — synchronous `InsufficientPoolBalance` |
 
-**UI launch:** Ready for **sim/dev** with async state machine, client IT prep (`submitPayload`), and dual fee lines (comptroller ETH + inbox ETH). **Not production-ready** until `ackPoolCredit`, honest claim-state UX, and mainnet fee oracles are resolved. See `docs/iterations/ITERATION_05_GAPS.md`.
+**UI launch:** Ready for **sim/dev** with async state machine, client IT prep (`submitPayload` + `ackPoolCredit`), encrypted pool ledger, and dual fee lines (comptroller ETH + inbox ETH). **Not production-ready** until honest claim-state UX and mainnet fee oracles are resolved. See `docs/iterations/ITERATION_07_GAPS.md`.
 
 ---
 
@@ -92,7 +93,7 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 | **UI** | “Campaign live — budget on-chain.” |
 | **Example** | Fund **10,000** units; roster totals **7,000** (alice 2,500 + bob 3,000 + carol 1,500). |
 | **Native** | `campaign.balance` = **10,000**. **Pass.** |
-| **PoD** | Encrypted treasury → facade **10,000** + `ackPoolCredit`; decrypted balance **10,000**. **Pass** (~1.1s). |
+| **PoD** | Encrypted treasury → facade **10,000** + encrypted `ackPoolCredit`; decrypted balance **10,000**. **Pass** (~1.1s). |
 | **Fees** | Native: 1 transfer. PoD: ~2 inbox legs for fund. |
 
 ---
@@ -114,7 +115,7 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 | **UI** | One action → “Paid.” |
 | **Example** | Alice claims **2,500**; balance **0 → 2,500**. |
 | **Native** | Single `claim` tx; paid same block. **Pass.** |
-| **PoD** | `submitPayload` + `claim` + payroll mine + pToken mine; alice **2,500**. **Pass** (~1.1s). |
+| **PoD** | `submitPayload` + `claim(itUint256)` + payroll mine + pToken mine; alice **2,500**. **Pass** (~1.1s). |
 | **Fees** | Native: ~0 protocol. PoD: ~45M wei inbox + mines. |
 
 ---
@@ -245,8 +246,9 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 | | |
 |--|--|
 | **UI** | Activity feed entry for claim. |
-| **Example** | Event: index **0**, recipient alice, amount **1,500** in same block as claim. |
-| **Native / PoD** | **Pass.** Amount is **public** on-chain (Sablier-shaped). |
+| **Example** | Event: index **0**, recipient alice, `amountCommitment` in same block as claim. |
+| **Native** | **Pass.** Amount is **public** on-chain. |
+| **PoD** | **Pass.** Emits `amountCommitment` (hash), not plaintext salary. |
 
 ---
 
@@ -306,7 +308,8 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 |--|--|
 | **UI** | Payment failed — insufficient pool. |
 | **Example** | Salary **5,000**; fund **2,000**; claim reverts; alice **0**. |
-| **Native / PoD** | **Pass.** |
+| **Native** | Sync `balanceOf` check. **Pass.** |
+| **PoD** | On-chain encrypted pool `_deductPool` → `InsufficientPoolBalance`. **Pass.** |
 
 ---
 
@@ -432,15 +435,17 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 | Inbox ETH per claim | 0 | ~45–50M wei (sim) |
 | Token movements | Public | Encrypted (pToken) |
 | Merkle amounts on-chain | Plaintext in leaf | `amountCommitment` hash |
-| Employer funding | `mint` + `transfer` | Portal seed + encrypted transfer |
+| Claim calldata | Plaintext `uint128` | `itUint256` (encrypted) |
+| Pool underfund (S22) | Sync balance check | Encrypted pool ledger + `checkedSub` |
+| Employer funding | `mint` + `transfer` | Portal seed + encrypted transfer + `ackPoolCredit` IT |
 | UI async state | Optional | **Required** |
 
 ---
 
 ## UI flow checklist
 
-1. **Employer (S02–S03):** Build merkle with commitments off-chain; fund via encrypted transfer; show decrypted campaign balance after sync.
-2. **Employee claim (S04–S07):** Quote comptroller fee + inbox fee; `submitPayload` then `claim`; poll until `hasClaimed` and balance sync.
+1. **Employer (S02–S03):** Build merkle with commitments off-chain; fund via encrypted transfer + `ackPoolCredit(itUint256)`; show decrypted campaign balance after sync.
+2. **Employee claim (S04–S07):** Quote comptroller fee + inbox fee; `submitPayload` then `claim(itUint256)`; poll until `hasClaimed` and balance sync.
 3. **Activity (S16):** Treat `ClaimInstant` as “claim submitted” until `hasClaimed` and balance confirm payout.
 4. **Post-payroll (S28–31):** Encrypted pToken transfer/approve — async completion (see `pod-privacy-portal` skill).
 
@@ -451,4 +456,4 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 - `sablier-payroll/docs/USER_STORIES.md` — Phase 1 story index
 - `docs/MERKLE_POD.md` — PoD merkle / commitment spec
 - `docs/ARCHITECTURE.md` — contract split and claim flow
-- `docs/iterations/ITERATION_05_GAPS.md` — remaining production gaps
+- `docs/iterations/ITERATION_07_GAPS.md` — encrypted pool ledger, sim MPC parity, S22 on-chain

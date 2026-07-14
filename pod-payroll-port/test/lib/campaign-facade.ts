@@ -19,6 +19,10 @@ const CLAIM_TO_SELECTOR = toFunctionSelector(
   "claimTo(uint256,address,((uint256,uint256),bytes),bytes32[])"
 ) as Hex;
 
+const CLAWBACK_SELECTOR = toFunctionSelector(
+  "clawback(address,((uint256,uint256),bytes),((uint256,uint256),bytes))"
+) as Hex;
+
 function formatItForAbi(it: {
   ciphertext: { ciphertextHigh: bigint; ciphertextLow: bigint };
   signature: Hex;
@@ -40,10 +44,6 @@ export function wrapCampaignFacade(
     await backend.ensureFacadeTokenIdle?.(raw.address, `preclaim-${pkg.index}`);
     await backend.tokenAdapter.syncAccount(raw.address, `preclaim-facade-${pkg.index}`);
     await backend.tokenAdapter.syncAccount(claimant, `preclaim-claimant-${pkg.index}`);
-    const facadeBalance = await backend.tokenAdapter.token.read.balanceOf([raw.address]);
-    if (facadeBalance < pkg.amount) {
-      throw new Error("InsufficientPoolBalance");
-    }
     const verifyIt = await backend.buildVerifyItAmount(claimant, pkg.amount);
     const itAmount = await buildClaimIt(claimant, pkg.amount, CLAIM_SELECTOR);
     const payoutItAmount = await backend.buildPayoutItAmount(raw.address, pkg.amount);
@@ -187,12 +187,14 @@ export function wrapCampaignFacade(
       },
       async clawback(args: unknown[], opts?: { account?: Address }) {
         const [to, amount] = args as [Address, bigint];
-        const itAmount = await backend.buildPayoutItAmount(raw.address, amount);
+        const admin = (opts?.account ?? backend.adminWallet.account.address) as Address;
+        const balanceIt = await backend.buildClaimItAmount(admin, raw.address, amount, CLAWBACK_SELECTOR);
+        const payoutIt = await backend.buildPayoutItAmount(raw.address, amount);
         const fees = backend.portalCtx.base.podTwoWayFees;
-        const hash = await raw.write.clawback([to, formatItForAbi(itAmount)], {
-          ...opts,
-          ...podTwoWayWriteOptions(fees),
-        });
+        const hash = await raw.write.clawback(
+          [to, formatItForAbi(balanceIt), formatItForAbi(payoutIt)],
+          { ...opts, ...podTwoWayWriteOptions(fees) }
+        );
         const receipt = await backend.publicClient.waitForTransactionReceipt({ hash });
         if (receipt.status === "success") {
           await mineAfterPayoutTransfer(podCtx, "clawback");
