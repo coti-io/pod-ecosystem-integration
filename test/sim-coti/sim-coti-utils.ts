@@ -181,10 +181,18 @@ export async function startSimCotiNetworks(opts?: {
   const sepoliaProc = sepoliaAlreadyUp ? undefined : spawnHardhatNode(sepoliaPort, SEPOLIA_CHAIN_ID);
   const cotiProc = cotiAlreadyUp ? undefined : spawnHardhatNode(cotiPort, SIM_COTI_CHAIN_ID);
 
-  await Promise.all([
-    waitForRpc(`http://127.0.0.1:${sepoliaPort}`),
-    waitForRpc(`http://127.0.0.1:${cotiPort}`),
-  ]);
+  try {
+    await Promise.all([
+      waitForRpc(`http://127.0.0.1:${sepoliaPort}`),
+      waitForRpc(`http://127.0.0.1:${cotiPort}`),
+    ]);
+  } catch (err) {
+    // If either side never becomes RPC-ready (e.g. a non-Hardhat process already bound the
+    // other port), Promise.all rejects before `stop` is ever returned to the caller — reap
+    // any child we did spawn here instead of leaking it.
+    await Promise.all([stopChild(sepoliaProc), stopChild(cotiProc)]);
+    throw err;
+  }
 
   const { viem: sepoliaViem } = await network.connect({ network: "localSepolia" });
   const { viem: cotiViem } = await network.connect({ network: "localSimCoti" });
