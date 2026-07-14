@@ -647,10 +647,6 @@ export const deployTestnetPriceOracle = async (params: DeployOracleParams) => {
     account: deployer,
   });
 
-  const { localToken, remoteToken } = oracleTokensForChain(chainId);
-  const h0 = await oracle.write.setInboxTokens([localToken, remoteToken], writeOpts);
-  await waitMined(publicClient, h0);
-
   const h1 = await oracle.write.setLocalTokenPriceUSD([localUsd18], writeOpts);
   await waitMined(publicClient, h1);
   const h2 = await oracle.write.setRemoteTokenPriceUSD([remoteUsd18], writeOpts);

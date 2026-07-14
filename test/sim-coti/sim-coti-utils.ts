@@ -87,6 +87,21 @@ export function forceSimCotiBackend(): void {
   process.env.COTI_BACKEND = "sim";
 }
 
+async function isRpcUp(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+    });
+    if (!res.ok) return false;
+    const json = (await res.json()) as { result?: string };
+    return !!json.result;
+  } catch {
+    return false;
+  }
+}
+
 async function waitForRpc(url: string, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -147,8 +162,16 @@ export async function startSimCotiNetworks(opts?: {
   const sepoliaPort = opts?.sepoliaPort ?? DEFAULT_SEPOLIA_PORT;
   const cotiPort = opts?.cotiPort ?? DEFAULT_COTI_PORT;
 
-  const sepoliaProc = spawnHardhatNode(sepoliaPort, SEPOLIA_CHAIN_ID);
-  const cotiProc = spawnHardhatNode(cotiPort, SIM_COTI_CHAIN_ID);
+  // Skip spawning when a devnet (e.g. scripts/devnet/start.sh) already owns these ports.
+  // Spawning a second, immediately-port-conflicting `hardhat node` and then reaping its
+  // exit has been observed to crash Node's child-process handling on some platforms.
+  const [sepoliaAlreadyUp, cotiAlreadyUp] = await Promise.all([
+    isRpcUp(`http://127.0.0.1:${sepoliaPort}`),
+    isRpcUp(`http://127.0.0.1:${cotiPort}`),
+  ]);
+
+  const sepoliaProc = sepoliaAlreadyUp ? undefined : spawnHardhatNode(sepoliaPort, SEPOLIA_CHAIN_ID);
+  const cotiProc = cotiAlreadyUp ? undefined : spawnHardhatNode(cotiPort, SIM_COTI_CHAIN_ID);
 
   await Promise.all([
     waitForRpc(`http://127.0.0.1:${sepoliaPort}`),
