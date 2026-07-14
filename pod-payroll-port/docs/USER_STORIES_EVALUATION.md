@@ -3,12 +3,13 @@
 Phase 1 reference: `sablier-payroll/` (native Sablier harness).  
 Phase 2 port: `pod-payroll-port/` (PoD + simCOTI).
 
+**Evaluation baseline:** iteration 7 (encrypted pool ledger, private amounts, sim MPC parity).  
 **Test status (last run):** both suites **35/35 passing**.
 
 | Suite | Command | Wall time |
 |-------|---------|-----------|
 | Native | `npm run test:sablier-payroll` | ~47s |
-| PoD | `npm run test:pod-payroll-port` | ~89s (~1.9× slower) |
+| PoD | `npm run test:pod-payroll-port` | ~90–95s (~1.9× slower) |
 
 **Token:** PUSD (native) / pPUSD (PoD), **6 decimals**. Story amounts are **base units** (e.g. `2_500` = 0.0025 display tokens). UI copy like “$10k funded” is narrative; on-chain S03 uses `10_000` base units.
 
@@ -16,19 +17,33 @@ Phase 2 port: `pod-payroll-port/` (PoD + simCOTI).
 
 ---
 
+## Iteration 7 — what changed for UI
+
+| Topic | Before (iter 5–6) | Now (iter 7) |
+|-------|-------------------|--------------|
+| Employer fund | Encrypted transfer only | Transfer + **`ackPoolCredit(itUint256)`** (encrypted pool ledger) |
+| Claim amount | Plaintext `uint128` or partial IT | **`itUint256`** in `claim` / `claimTo` calldata |
+| Underfund (S22) | Client balance pre-check or async-only | **On-chain** `_deductPool` → `InsufficientPoolBalance()` |
+| Clawback | Single encrypted IT | **Dual IT**: facade deduct IT + pToken payout IT |
+| Events | Public amount in `ClaimInstant` | **`amountCommitment`** only (no plaintext salary) |
+| Sim | MPC precompile on COTI only | Precompile on **COTI + AVAX surrogate** (facade `validateCiphertext` works) |
+
+---
+
 ## Privacy & UI readiness (summary)
 
 | User need | Native | PoD | Truly private? |
 |-----------|--------|-----|----------------|
-| Employer funds campaign | Public ERC20 transfer | Encrypted pToken + encrypted `ackPoolCredit` IT | **Yes** — transfer + pool ledger are ciphertext / IT |
-| Employee sees salary | Plaintext in merkle + claim calldata | `itUint256` claim calldata + encrypted COTI verify | **Yes** — merkle uses `amountCommitment`; claim amount is IT |
-| Employee gets paid | Sync public ERC20 | Async encrypted pToken payout | **Yes** — COTI balances are ciphertext |
+| Employer funds campaign | Public ERC20 transfer | Encrypted pToken + encrypted `ackPoolCredit` IT | **Yes** — transfer and pool ledger are ciphertext / IT |
+| Employee sees salary on-chain | Plaintext in merkle + claim calldata | `amountCommitment` in merkle; **`itUint256`** in claim calldata | **Yes** — no plaintext amount in leaves or claim args |
+| Employee gets paid | Sync public ERC20 | Async encrypted pToken payout | **Yes** — balances are ciphertext |
 | Activity feed (S16) | `ClaimInstant` with public amount | `ClaimInstant` with `amountCommitment` | **Partial** — index/recipient public; amount is commitment hash only |
 | Move funds after pay (S28–31) | Public ERC20 | Encrypted pToken + decrypt in adapter | **Yes** — if UI uses encrypted paths |
 | Employer treasury | Mock `mint` | Privacy Portal deposit (test infra) | **Yes** for balances; portal is separate UI |
-| Underfund guard (S22) | Sync `balanceOf` check | On-chain encrypted pool `ge` (`_deductPool`) | **Yes** — synchronous `InsufficientPoolBalance` |
+| Underfund guard (S22) | Sync `balanceOf` check | On-chain encrypted pool `ge` (`_deductPool`) | **Yes** — synchronous revert before vault submit |
+| Wrong amount (S09) | Plaintext compare | COTI `verifyAndCredit` private eq + facade IT validation | **Yes** — mismatch reverts on COTI or facade |
 
-**UI launch:** Ready for **sim/dev** with async state machine, client IT prep (`submitPayload` + `ackPoolCredit`), encrypted pool ledger, and dual fee lines (comptroller ETH + inbox ETH). **Not production-ready** until honest claim-state UX and mainnet fee oracles are resolved. See `docs/iterations/ITERATION_07_GAPS.md`.
+**UI launch:** Ready for **sim/dev** with async state machine, client IT prep (`submitPayload`, `ackPoolCredit`, claim ITs), encrypted pool ledger, and dual fee lines (comptroller ETH + inbox ETH). **Not production-ready** until honest claim-state UX, mainnet fee oracles, and optional `ackPoolCredit` binding to pToken callbacks. See `docs/iterations/ITERATION_07_GAPS.md`.
 
 ---
 
@@ -41,18 +56,18 @@ Phase 2 port: `pod-payroll-port/` (PoD + simCOTI).
 - PoD inbox: none
 - **UX:** one tx; balance updates same block
 
-### PoD (typical successful claim, e.g. S05 ~1085ms)
+### PoD (typical successful claim, e.g. S05 ~1.1s)
 
 Approximate inbox fees per two-way leg (sim logs):
 
 | Leg | ~targetFee (wei) | ~callbackFee (wei) |
 |-----|------------------|---------------------|
-| pToken transfer (fund / payout) | ~19,200,000 | ~430,000 |
+| pToken transfer (fund / payout / clawback) | ~19,200,000 | ~430,000 |
 | Payroll verify (COTI) | ~22,800,000 | ~913,000 |
 
 Per successful claim (campaign already funded): ~2 inbox round-trips → **~45–50M wei** inbox ETH, plus claim tx gas, plus optional comptroller wei.
 
-Per new campaign (e.g. S03): deploy + COTI leaf registration + encrypted fund (~2 mines) → **~1–3s** vs native **&lt;100ms**.
+Per new campaign (e.g. S03): deploy + COTI leaf registration + encrypted fund + `ackPoolCredit` (~2–3 inbox mines) → **~1–3s** vs native **&lt;100ms**.
 
 ---
 
@@ -69,7 +84,7 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 | **UI** | Show token, comptroller, and campaign addresses after setup. |
 | **Example** | Campaign funded **5,000** units; roster alice **1,000**. |
 | **Native** | Deploy harness; mint/transfer **5,000** to campaign. **Pass.** |
-| **PoD** | Deploy portal, pToken, vault, facade; encrypted fund **5,000**. **Pass** (~31s). |
+| **PoD** | Deploy portal, pToken, vault, facade; encrypted fund **5,000** + `ackPoolCredit`. **Pass** (~31s). |
 | **Fees** | Native: gas only. PoD: portal seed + token registration + fund mines. |
 
 ---
@@ -93,8 +108,8 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 | **UI** | “Campaign live — budget on-chain.” |
 | **Example** | Fund **10,000** units; roster totals **7,000** (alice 2,500 + bob 3,000 + carol 1,500). |
 | **Native** | `campaign.balance` = **10,000**. **Pass.** |
-| **PoD** | Encrypted treasury → facade **10,000** + encrypted `ackPoolCredit`; decrypted balance **10,000**. **Pass** (~1.1s). |
-| **Fees** | Native: 1 transfer. PoD: ~2 inbox legs for fund. |
+| **PoD** | Encrypted treasury → facade **10,000** + `ackPoolCredit(itUint256)`; decrypted pToken balance **10,000**. **Pass** (~1.1s). |
+| **Fees** | Native: 1 transfer. PoD: ~2 inbox legs for fund + 1 ack tx. |
 
 ---
 
@@ -104,7 +119,8 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 |--|--|
 | **UI** | Employee opens payroll line; sees salary and index. |
 | **Example** | Alice: salary **2,500**, index **0**. |
-| **Native / PoD** | Preview matches package. **Pass.** |
+| **Native** | Preview from off-chain package (plaintext). **Pass.** |
+| **PoD** | Same off-chain package; on-chain leaf has commitment only. **Pass.** |
 
 ---
 
@@ -115,7 +131,7 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 | **UI** | One action → “Paid.” |
 | **Example** | Alice claims **2,500**; balance **0 → 2,500**. |
 | **Native** | Single `claim` tx; paid same block. **Pass.** |
-| **PoD** | `submitPayload` + `claim(itUint256)` + payroll mine + pToken mine; alice **2,500**. **Pass** (~1.1s). |
+| **PoD** | `submitPayload` + `claim(itUint256)` + `_deductPool` + payroll mine + pToken mine; alice **2,500**. **Pass** (~1.1s). |
 | **Fees** | Native: ~0 protocol. PoD: ~45M wei inbox + mines. |
 
 ---
@@ -126,7 +142,8 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 |--|--|
 | **UI** | Same claim flow for another roster slot. |
 | **Example** | Alice **2,500**, then bob **3,000** from **10,000** fund. |
-| **Native / PoD** | Both paid; independent indices. **Pass** (PoD ~3.1s). |
+| **Native** | Both paid; independent indices. **Pass.** |
+| **PoD** | Pool ledger deducts per claim; both paid after mines. **Pass** (~3.1s). |
 
 ---
 
@@ -136,7 +153,7 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 |--|--|
 | **UI** | Disable claim button; show “Already claimed.” |
 | **Example** | After alice claims index **0**, `hasClaimed(0) === true`. |
-| **Native / PoD** | **Pass.** |
+| **Native / PoD** | **Pass.** PoD: `hasClaimed` set after COTI callback, not at claim tx. |
 
 ---
 
@@ -156,7 +173,8 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 |--|--|
 | **UI** | Error: amount does not match roster. |
 | **Example** | Roster **1,000**; claim submits **2,000**. |
-| **Native / PoD** | Revert. **Pass.** |
+| **Native** | Plaintext amount check. **Pass.** |
+| **PoD** | COTI private eq or facade IT validation reverts. **Pass.** |
 
 ---
 
@@ -227,7 +245,7 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 | **UI** | Clawback allowed in grace; blocked after grace while active. |
 | **Example** | After alice claims, admin clawbacks **1,000** to employer in grace; after 7 days blocked. |
 | **Native** | Public clawback. **Pass.** |
-| **PoD** | Encrypted clawback + mine. **Pass** (~1s). |
+| **PoD** | Dual-IT clawback (`balanceIt` + `payoutIt`), `_deductPool`, mine. **Pass** (~1s). |
 
 ---
 
@@ -237,7 +255,7 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 |--|--|
 | **UI** | Admin recovery after campaign expiry. |
 | **Example** | Clawback **1,000** to employer after expiration. |
-| **Native / PoD** | **Pass.** |
+| **Native / PoD** | **Pass.** PoD: encrypted clawback path. |
 
 ---
 
@@ -258,7 +276,8 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 |--|--|
 | **UI** | Remaining campaign budget updates. |
 | **Example** | Fund **10,000**; pay 2,500 + 3,000 + 1,500; remaining **3,000**. |
-| **Native / PoD** | **Pass** (PoD ~1.5s). |
+| **Native** | Public balance decreases. **Pass.** |
+| **PoD** | Pool ledger + decrypted adapter balance; remaining **3,000**. **Pass** (~1.5s). |
 
 ---
 
@@ -309,7 +328,7 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 | **UI** | Payment failed — insufficient pool. |
 | **Example** | Salary **5,000**; fund **2,000**; claim reverts; alice **0**. |
 | **Native** | Sync `balanceOf` check. **Pass.** |
-| **PoD** | On-chain encrypted pool `_deductPool` → `InsufficientPoolBalance`. **Pass.** |
+| **PoD** | Facade `_deductPool` → `InsufficientPoolBalance()` (sync, before vault). **Pass.** |
 
 ---
 
@@ -429,25 +448,41 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 | Dimension | Native Sablier | PoD port |
 |-----------|----------------|----------|
 | Tests | 35/35 | 35/35 |
-| Suite time | ~47s | ~89s |
+| Suite time | ~47s | ~90–95s |
 | Typical claim | 1 tx, same-block | 1 tx + 2 cross-chain mines |
 | Typical claim latency | &lt;100ms | ~0.9–3s |
 | Inbox ETH per claim | 0 | ~45–50M wei (sim) |
 | Token movements | Public | Encrypted (pToken) |
 | Merkle amounts on-chain | Plaintext in leaf | `amountCommitment` hash |
 | Claim calldata | Plaintext `uint128` | `itUint256` (encrypted) |
+| Claim events | Public `amount` | `amountCommitment` only |
 | Pool underfund (S22) | Sync balance check | Encrypted pool ledger + `checkedSub` |
 | Employer funding | `mint` + `transfer` | Portal seed + encrypted transfer + `ackPoolCredit` IT |
+| Clawback | Plaintext amount | Dual `itUint256` (deduct + payout) |
+| Sim MPC | N/A | Precompile on COTI **and** AVAX surrogate |
 | UI async state | Optional | **Required** |
 
 ---
 
 ## UI flow checklist
 
-1. **Employer (S02–S03):** Build merkle with commitments off-chain; fund via encrypted transfer + `ackPoolCredit(itUint256)`; show decrypted campaign balance after sync.
-2. **Employee claim (S04–S07):** Quote comptroller fee + inbox fee; `submitPayload` then `claim(itUint256)`; poll until `hasClaimed` and balance sync.
-3. **Activity (S16):** Treat `ClaimInstant` as “claim submitted” until `hasClaimed` and balance confirm payout.
-4. **Post-payroll (S28–31):** Encrypted pToken transfer/approve — async completion (see `pod-privacy-portal` skill).
+1. **Employer (S02–S03):** Build merkle with commitments off-chain; fund via encrypted `token.transfer(facade)`; sync balances; submit **`ackPoolCredit(itUint256)`** signed by employer; show decrypted facade balance after sync.
+2. **Employee claim (S04–S07):** Quote comptroller fee + inbox fee; `PodClaimStore.submitPayload` (verify IT + payout IT); `claim(itUint256)` with claimant-signed amount IT; poll until `hasClaimed` and balance sync.
+3. **Activity (S16):** Treat `ClaimInstant` as “claim submitted” — commitment hash visible, not salary; confirm payout via `hasClaimed` + balance.
+4. **Admin clawback (S15, S18):** Build facade `balanceIt` + pToken `payoutIt`; mine after tx.
+5. **Post-payroll (S28–31):** Encrypted pToken transfer/approve — async completion (see `pod-privacy-portal` skill).
+
+---
+
+## Production gaps (not blocking sim stories)
+
+| Gap | UI impact |
+|-----|-----------|
+| Claim-state UX | `ClaimInstant` fires before async payout completes |
+| Mainnet fees | Sim inbox wei; production needs live oracle / portal fee quotes |
+| `ackPoolCredit` trust | Employer attests funded amount; may bind to pToken callback later |
+
+Details: `docs/iterations/ITERATION_07_GAPS.md`.
 
 ---
 
@@ -456,4 +491,4 @@ Format: **UI intent** → **Example** → **Native** → **PoD** → **Notes / f
 - `sablier-payroll/docs/USER_STORIES.md` — Phase 1 story index
 - `docs/MERKLE_POD.md` — PoD merkle / commitment spec
 - `docs/ARCHITECTURE.md` — contract split and claim flow
-- `docs/iterations/ITERATION_07_GAPS.md` — encrypted pool ledger, sim MPC parity, S22 on-chain
+- `docs/iterations/ITERATION_01_GAPS.md` … `ITERATION_07_GAPS.md` — iteration gap reports
