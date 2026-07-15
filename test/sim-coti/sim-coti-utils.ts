@@ -10,6 +10,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { network } from "hardhat";
@@ -87,6 +88,33 @@ export function forceSimCotiBackend(): void {
   process.env.COTI_BACKEND = "sim";
 }
 
+// TCP-level probe, not an RPC-level one: a slow-starting `hardhat node` accepts the
+// connection as soon as it calls listen(), well before its HTTP/JSON-RPC handler is
+// ready to respond. Checking for an actual RPC response here (as an earlier version
+// of this function did) leaves a race window where a starting-but-not-yet-answering
+// node reads as "not up", so a second `hardhat node` gets spawned onto the same port
+// anyway. A raw connect also correctly treats *any* listener on the port (RPC or not)
+// as "occupied" rather than assuming it's safe to bind. Actual RPC readiness is still
+// confirmed afterward by waitForRpc.
+async function isPortBound(port: number, host = "127.0.0.1"): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ port, host });
+    const finish = (result: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    // A genuinely free localhost port refuses immediately (ECONNREFUSED) — hitting the
+    // timeout instead means the connect attempt never resolved either way, which is not
+    // evidence the port is free. Treat it as occupied: the failure mode of wrongly skipping
+    // a spawn (waitForRpc below just times out after 30s with a clear error) is far safer
+    // than wrongly spawning into a port that turns out to be bound after all.
+    socket.setTimeout(1000, () => finish(true));
+  });
+}
+
 async function waitForRpc(url: string, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -147,13 +175,29 @@ export async function startSimCotiNetworks(opts?: {
   const sepoliaPort = opts?.sepoliaPort ?? DEFAULT_SEPOLIA_PORT;
   const cotiPort = opts?.cotiPort ?? DEFAULT_COTI_PORT;
 
-  const sepoliaProc = spawnHardhatNode(sepoliaPort, SEPOLIA_CHAIN_ID);
-  const cotiProc = spawnHardhatNode(cotiPort, SIM_COTI_CHAIN_ID);
-
-  await Promise.all([
-    waitForRpc(`http://127.0.0.1:${sepoliaPort}`),
-    waitForRpc(`http://127.0.0.1:${cotiPort}`),
+  // Skip spawning when a devnet (e.g. scripts/devnet/start.sh) already owns these ports.
+  // Spawning a second, immediately-port-conflicting `hardhat node` and then reaping its
+  // exit has been observed to crash Node's child-process handling on some platforms.
+  const [sepoliaAlreadyUp, cotiAlreadyUp] = await Promise.all([
+    isPortBound(sepoliaPort),
+    isPortBound(cotiPort),
   ]);
+
+  const sepoliaProc = sepoliaAlreadyUp ? undefined : spawnHardhatNode(sepoliaPort, SEPOLIA_CHAIN_ID);
+  const cotiProc = cotiAlreadyUp ? undefined : spawnHardhatNode(cotiPort, SIM_COTI_CHAIN_ID);
+
+  try {
+    await Promise.all([
+      waitForRpc(`http://127.0.0.1:${sepoliaPort}`),
+      waitForRpc(`http://127.0.0.1:${cotiPort}`),
+    ]);
+  } catch (err) {
+    // If either side never becomes RPC-ready (e.g. a non-Hardhat process already bound the
+    // other port), Promise.all rejects before `stop` is ever returned to the caller — reap
+    // any child we did spawn here instead of leaking it.
+    await Promise.all([stopChild(sepoliaProc), stopChild(cotiProc)]);
+    throw err;
+  }
 
   const { viem: sepoliaViem } = await network.connect({ network: "localSepolia" });
   const { viem: cotiViem } = await network.connect({ network: "localSimCoti" });
