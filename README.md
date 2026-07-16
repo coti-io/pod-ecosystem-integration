@@ -10,8 +10,6 @@ Integration tests, deploy scripts, and a **multi-repo dev workspace** for the CO
 | [coti-contracts](../coti-contracts) | dApp contracts (`contracts/pod/`) |
 | **pod-ecosystem-integration** (this repo) | E2E tests, deploy orchestration, workspace |
 
-Legacy monolith: [pod-mpc-lib](../pod-mpc-lib) — deprecated; use the three repos above.
-
 ## Setup
 
 Clone all repos as **siblings** under the same parent directory:
@@ -21,7 +19,6 @@ workspaces/
   coti-pod-inbox-contracts/
   coti-contracts/
   pod-ecosystem-integration/   ← you are here
-  pod-mpc-lib/                 ← legacy (optional)
 ```
 
 ```bash
