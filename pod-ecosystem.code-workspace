@@ -11,6 +11,12 @@
     {
       "name": "integration",
       "path": "."
+    },
+    {
+      "path": "../sim-coti-node"
+    },
+    {
+      "path": "../pod-dapp-ports"
     }
   ],
   "settings": {

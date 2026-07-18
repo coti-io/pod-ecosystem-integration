@@ -189,7 +189,12 @@
           "portal": "0x25E7a1BddF4b9696F19A726Cb2Ce550467527e90",
           "pToken": "0xe7956aDaC668b563Dc77eD29C5E7A4Ef5edFB3FB"
         }
-      }
+      },
+      "privatePayrollCoti": "0xcdf4d94b3f2ff46e5468fde76d0282be718122dc",
+      "payrollVault": "0x4b74b2ddeb21565b18292cf42ec950f44e99be87",
+      "payrollClaimStore": "0xe0f315496d70a9f041c04d977b7b730b6b431c94",
+      "payrollCampaignFactory": "0xb9029c2eb84666a0c6434795467184660a85d268",
+      "payrollCampaignFacade": "0x127A179E4E69125c3dc46c7a8fc46BC0D8403E9C"
     },
     "2632500": {
       "inbox": "",
@@ -239,7 +244,8 @@
           "errorLength": "300",
           "bufferRatioX10000": "5000"
         }
-      }
+      },
+      "privatePayrollCoti": "0xcdf4d94b3f2ff46e5468fde76d0282be718122dc"
     },
     "11155111": {
       "inbox": "0xAb625bE229F603f6BBF964474AFf6d5487e364De",

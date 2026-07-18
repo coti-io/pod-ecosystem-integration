@@ -12,6 +12,30 @@ import { privateKeyToAccount } from "viem/accounts";
 import { ONBOARD_CONTRACT_ADDRESS, Wallet as CotiWallet } from "@coti-io/coti-ethers";
 import { decryptUint, decryptUint256 as sdkDecryptUint256, prepareIT, prepareIT256 } from "@coti-io/coti-sdk-typescript";
 import { JsonRpcProvider } from "ethers";
+import { isSimCotiBackend, resolveCotiBackend } from "../../simCOTI/test/coti-network.js";
+import { injectSimCotiPrecompile } from "../../simCOTI/hardhat/injectPrecompile.js";
+import {
+  SimWallet,
+  deriveSimAesKey,
+  prepareSimIT,
+  prepareSimIT256,
+  decryptSimUint,
+  decryptSimUint128,
+  decryptSimUint256,
+  SIM_COTI_CHAIN_ID,
+} from "../../simCOTI/sdk/index.js";
+import { setupSimCrypto } from "../sim-coti/sim-coti-utils.js";
+
+export const decryptUintForBackend = (ct: bigint, userKey: string): bigint =>
+  isSimCotiBackend() ? decryptSimUint(ct, userKey) : decryptUint(ct, userKey);
+
+export const decryptUint256ForBackend = (
+  ct: { ciphertextHigh: bigint; ciphertextLow: bigint },
+  userKey: string
+): bigint =>
+  isSimCotiBackend() ? decryptSimUint256(ct, userKey) : sdkDecryptUint256(ct, userKey);
+
+export { resolveCotiBackend, isSimCotiBackend, resolveCotiNetworkName } from "../../simCOTI/test/coti-network.js";
 
 /**
  * Native `msg.value` split for two-way Pod / inbox calls (from `inbox.calculateTwoWayFeeRequiredInLocalToken`).
@@ -121,6 +145,16 @@ let cachedCotiPrivateKey: string | undefined;
  */
 export const resolveCotiTestnetPrivateKey = async (rpcUrl?: string): Promise<string> => {
   if (cachedCotiPrivateKey) return cachedCotiPrivateKey;
+
+  if (isSimCotiBackend()) {
+    const pk =
+      process.env.PRIVATE_KEY?.trim() ||
+      process.env.COTI_TESTNET_PRIVATE_KEY?.trim() ||
+      process.env._PRIVATE_KEY?.trim() ||
+      "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    cachedCotiPrivateKey = pk;
+    return pk;
+  }
 
   const candidates: Array<[string, string]> = [];
   const addCandidate = (label: string, value: string | undefined) => {
@@ -378,8 +412,16 @@ async function applyCotiBatchTxFeePerGasCap(
 export const HARDHAT_EDR_TX_GAS_CAP = 16_777_216n;
 
 /** viem `writeContract` options attaching the two-way native payment from {@link estimateGas}. */
-export function podTwoWayWriteOptions(fees: PodTwoWayFeeEstimate): { value: bigint } {
-  return { value: fees.totalValueWei };
+export function podTwoWayWriteOptions(fees: PodTwoWayFeeEstimate): {
+  value: bigint;
+  gasPrice?: bigint;
+} {
+  const opts: { value: bigint; gasPrice?: bigint } = { value: fees.totalValueWei };
+  // Pin gas price on sim so `estimateGas` (fixed assumed price) matches `tx.gasprice` after setup txs raise basefee.
+  if (isSimCotiBackend()) {
+    opts.gasPrice = BigInt(MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI);
+  }
+  return opts;
 }
 
 /** Minimum context for sweeping native fees from both inbox deployments. */
@@ -424,6 +466,16 @@ export const onboardUser = async (privateKey: string, rpcUrl: string, onboardAdd
   const cached = aesKeyCache.get(cacheId);
   if (cached) {
     return cached;
+  }
+
+  if (isSimCotiBackend()) {
+    const pk = normalizePrivateKey(privateKey) as `0x${string}`;
+    let key = deriveSimAesKey(pk, SIM_COTI_CHAIN_ID).replace(/^0x/, "");
+    if (key.length > 32) key = key.slice(0, 32);
+    aesKeyCache.set(cacheId, key);
+    process.env[keyEnv] = key;
+    process.env[`${keyEnv}_FOR_PRIVATE_KEY`] = privateKeyId;
+    return key;
   }
 
   const envKey = process.env[keyEnv];
@@ -530,6 +582,29 @@ export const getLatestRequest = async (
   const requests = await getRequests(inbox, targetChainId, fromIndex, 1);
   assert.ok(requests.length > 0);
   return requests[0];
+};
+
+/** Next PoD→remote request not yet mined on the destination inbox (FIFO by request nonce). */
+export const getNextUnminedOutboundRequest = async (
+  sourceInbox: any,
+  destInbox: any,
+  sourceChainId: bigint | number,
+  targetChainId: bigint | number
+): Promise<Request> => {
+  const src = BigInt(sourceChainId);
+  const tgt = BigInt(targetChainId);
+  const lastMined = (await destInbox.read.lastIncomingRequestId([src])) as `0x${string}`;
+  let nextNonce = 1n;
+  if (lastMined !== "0x0000000000000000000000000000000000000000000000000000000000000000") {
+    const [, , minedNonce] = (await destInbox.read.unpackRequestId([lastMined])) as [
+      bigint,
+      bigint,
+      bigint,
+    ];
+    nextNonce = minedNonce + 1n;
+  }
+  const nextRequestId = (await sourceInbox.read.getRequestId([src, tgt, nextNonce])) as `0x${string}`;
+  return getRequest(sourceInbox, nextRequestId);
 };
 
 // Loads a single outbound request from the inbox mapping (id encodes source+target+nonce).
@@ -658,6 +733,9 @@ export const mineRequest = async (
     // Pod tests use Hardhat EDR as "Sepolia"; EDR rejects tx gas > 16M. The return-leg callback is cheap;
     // `targetFee` on the response request can still mirror COTI fee-budget units — cap the outer tx here.
     if (chain === "sepolia" && gas > HARDHAT_EDR_TX_GAS_CAP) {
+      gas = HARDHAT_EDR_TX_GAS_CAP;
+    }
+    if (chain === "coti" && isSimCotiBackend() && gas > HARDHAT_EDR_TX_GAS_CAP) {
       gas = HARDHAT_EDR_TX_GAS_CAP;
     }
     if (chain === "coti") {
@@ -931,10 +1009,15 @@ export const buildEncryptedInput128 = async (
     "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[])"
   );
 
-  const it = prepareIT(value, {
-    wallet: ctx.crypto.cotiEncryptWallet as any,
-    userKey: ctx.crypto.userKey,
-  }, ctx.contracts.inboxCoti.address, functionSelector);
+  const it = isSimCotiBackend()
+    ? await prepareSimIT(value, {
+        wallet: ctx.crypto.cotiEncryptWallet as SimWallet,
+        userKey: ctx.crypto.userKey,
+      }, ctx.contracts.inboxCoti.address, functionSelector)
+    : prepareIT(value, {
+        wallet: ctx.crypto.cotiEncryptWallet as any,
+        userKey: ctx.crypto.userKey,
+      }, ctx.contracts.inboxCoti.address, functionSelector);
 
   const signature =
     typeof it.signature === "string"
@@ -964,25 +1047,45 @@ export const decryptUint128 = (
   decryptFn: (ct: bigint, key: string) => bigint = decryptUint
 ): bigint => {
   const ct = decodeCtUint128(encryptedResult);
+  if (isSimCotiBackend()) {
+    return decryptSimUint128(ct, userKey);
+  }
   return decryptFn(ct, userKey);
 };
 
 // Encrypt a 256-bit value as an itUint256 structure.
+export type BuildEncryptedInput256Options = {
+  /** Contract whose address becomes `msg.sender` during ValidateCiphertext (default: inboxCoti). */
+  validatingContract?: `0x${string}`;
+  /** Function selector embedded in the IT signature (default: batchProcessRequests). */
+  functionSelector?: `0x${string}`;
+};
+
+const defaultBatchProcessRequestsSelector = () =>
+  toFunctionSelector(
+    "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[])"
+  );
+
 export const buildEncryptedInput256 = async (
   ctx: MpcEncryptContext,
-  value: bigint
+  value: bigint,
+  opts?: BuildEncryptedInput256Options
 ): Promise<{
   ciphertext: { ciphertextHigh: bigint; ciphertextLow: bigint };
   signature: `0x${string}`;
 }> => {
-  const functionSelector = toFunctionSelector(
-    "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[])"
-  );
+  const validatingContract = opts?.validatingContract ?? ctx.contracts.inboxCoti.address;
+  const functionSelector = opts?.functionSelector ?? defaultBatchProcessRequestsSelector();
 
-  const it = prepareIT256(value, {
-    wallet: ctx.crypto.cotiEncryptWallet as any,
-    userKey: ctx.crypto.userKey,
-  }, ctx.contracts.inboxCoti.address, functionSelector);
+  const it = isSimCotiBackend()
+    ? await prepareSimIT256(value, {
+        wallet: ctx.crypto.cotiEncryptWallet as SimWallet,
+        userKey: ctx.crypto.userKey,
+      }, validatingContract, functionSelector)
+    : prepareIT256(value, {
+        wallet: ctx.crypto.cotiEncryptWallet as any,
+        userKey: ctx.crypto.userKey,
+      }, validatingContract, functionSelector);
 
   const signature =
     typeof it.signature === "string"
@@ -1014,7 +1117,7 @@ export const decryptUint256 = (
   _decryptFn?: (ct: bigint, key: string) => bigint
 ): bigint => {
   const { ciphertextHigh, ciphertextLow } = decodeCtUint256(encryptedResult);
-  return sdkDecryptUint256({ ciphertextHigh, ciphertextLow }, userKey);
+  return decryptUint256ForBackend({ ciphertextHigh, ciphertextLow }, userKey);
 };
 
 // Normalizes ciphertext into a bigint.
@@ -1038,18 +1141,38 @@ export const setupContext = async (params: {
   /** Defaults to `MpcAdder`; use `MpcAdderPausable` for retry/pause system tests. */
   podAdderContractName?: "MpcAdder" | "MpcAdderPausable";
 }): Promise<TestContext> => {
-  const cotiRpcUrl = requireEnv("COTI_TESTNET_RPC_URL");
-  const cotiPrivateKeyMain = normalizePrivateKey(await resolveCotiTestnetPrivateKey(cotiRpcUrl));
+  const backend = resolveCotiBackend();
+  const simMode = backend === "sim";
+
+  if (simMode) {
+    await injectSimCotiPrecompile(params.cotiViem);
+    await injectSimCotiPrecompile(params.sepoliaViem);
+  }
+
+  const cotiRpcUrl = simMode ? "http://127.0.0.1:8545" : requireEnv("COTI_TESTNET_RPC_URL");
+  const cotiPrivateKeyMain = simMode
+    ? normalizePrivateKey(
+        process.env.PRIVATE_KEY?.trim() ||
+          process.env.COTI_TESTNET_PRIVATE_KEY?.trim() ||
+          process.env._PRIVATE_KEY?.trim() ||
+          (() => {
+            throw new Error("Missing PRIVATE_KEY for simCoti tests");
+          })()
+      )
+    : normalizePrivateKey(await resolveCotiTestnetPrivateKey(cotiRpcUrl));
 
   const sepoliaChainId = parseInt(process.env.HARDHAT_CHAIN_ID || "31337");
-  const cotiChainId = BigInt(parseInt(process.env.COTI_TESTNET_CHAIN_ID || "7082400"));
-  const cotiDeploymentsPath =
-    process.env.COTI_DEPLOYMENTS_PATH || path.resolve(process.cwd(), "deployments", "coti-testnet.json");
+  const cotiChainId = simMode
+    ? BigInt(SIM_COTI_CHAIN_ID)
+    : BigInt(parseInt(process.env.COTI_TESTNET_CHAIN_ID || "7082400"));
+  const cotiDeploymentsPath = simMode
+    ? process.env.COTI_DEPLOYMENTS_PATH || path.resolve(process.cwd(), "deployments", "sim-coti.json")
+    : process.env.COTI_DEPLOYMENTS_PATH || path.resolve(process.cwd(), "deployments", "coti-testnet.json");
 
-  logStep("Preparing chain clients");
+  logStep(`Preparing chain clients (${backend})`);
   const cotiChain = defineChain({
     id: Number(cotiChainId),
-    name: "COTI Testnet",
+    name: simMode ? "simCoti" : "COTI Testnet",
     nativeCurrency: { name: "COTI", symbol: "COTI", decimals: 18 },
     rpcUrls: {
       default: { http: [cotiRpcUrl] },
@@ -1075,6 +1198,7 @@ export const setupContext = async (params: {
 
   const reuseSepolia = !!(inboxSepoliaAddress && mpcAdderAddress);
   let reuseCoti =
+    !simMode &&
     envOrEmpty("COTI_REUSE_CONTRACTS").toLowerCase() === "true" &&
     !!inboxCotiAddress &&
     !!mpcExecutorAddress;
@@ -1197,12 +1321,28 @@ export const setupContext = async (params: {
     logStep("Sepolia miner already configured");
   }
 
-  const cotiProvider = new JsonRpcProvider(cotiRpcUrl) as any;
-  const cotiPrivateKey = await resolveCotiTestnetPrivateKey(cotiRpcUrl);
-  const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
-  const userKey = await onboardUser(cotiPrivateKey, cotiRpcUrl, onboardAddress);
-  const cotiEncryptWallet = new CotiWallet(cotiPrivateKey, cotiProvider as any);
-  cotiEncryptWallet.setAesKey(userKey);
+  const cotiPrivateKey = simMode ? cotiPrivateKeyMain : await resolveCotiTestnetPrivateKey(cotiRpcUrl);
+
+  let userKey: string;
+  let cotiEncryptWallet: CotiWallet | SimWallet;
+  if (simMode) {
+    const simCrypto = await setupSimCrypto({
+      cotiViem: params.cotiViem,
+      cotiPrivateKey,
+      cotiAccount,
+      cotiPublicClient,
+      cotiWallet,
+    });
+    userKey = simCrypto.userKey;
+    cotiEncryptWallet = simCrypto.cotiEncryptWallet;
+    logStep(`simCoti: registered AES key for ${cotiAccount.address}`);
+  } else {
+    const cotiProvider = new JsonRpcProvider(cotiRpcUrl) as any;
+    const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
+    userKey = await onboardUser(cotiPrivateKey, cotiRpcUrl, onboardAddress);
+    cotiEncryptWallet = new CotiWallet(cotiPrivateKey, cotiProvider as any);
+    cotiEncryptWallet.setAesKey(userKey);
+  }
 
   logStep("Setup complete");
 
@@ -1245,19 +1385,40 @@ export const setupContextWideMpc = async (
   params: { sepoliaViem: any; cotiViem: any },
   config: MpcWideSetupConfig
 ): Promise<TestContextWideMpc> => {
-  const cotiRpcUrl = requireEnv("COTI_TESTNET_RPC_URL");
-  const cotiPrivateKeyMain = normalizePrivateKey(await resolveCotiTestnetPrivateKey(cotiRpcUrl));
+  const backend = resolveCotiBackend();
+  const simMode = backend === "sim";
+
+  if (simMode) {
+    await injectSimCotiPrecompile(params.cotiViem);
+    await injectSimCotiPrecompile(params.sepoliaViem);
+  }
+
+  const cotiRpcUrl = simMode ? "http://127.0.0.1:8545" : requireEnv("COTI_TESTNET_RPC_URL");
+  const cotiPrivateKeyMain = simMode
+    ? normalizePrivateKey(
+        process.env.PRIVATE_KEY?.trim() ||
+          process.env.COTI_TESTNET_PRIVATE_KEY?.trim() ||
+          process.env._PRIVATE_KEY?.trim() ||
+          (() => {
+            throw new Error("Missing PRIVATE_KEY for simCoti tests");
+          })()
+      )
+    : normalizePrivateKey(await resolveCotiTestnetPrivateKey(cotiRpcUrl));
 
   const sepoliaChainId = parseInt(process.env.HARDHAT_CHAIN_ID || "31337");
-  const cotiChainId = BigInt(parseInt(process.env.COTI_TESTNET_CHAIN_ID || "7082400"));
-  const cotiDeploymentsPath =
-    process.env.COTI_DEPLOYMENTS_PATH ||
-    path.resolve(process.cwd(), "deployments", config.cotiDeploymentsFile);
+  const cotiChainId = simMode
+    ? BigInt(SIM_COTI_CHAIN_ID)
+    : BigInt(parseInt(process.env.COTI_TESTNET_CHAIN_ID || "7082400"));
+  const cotiDeploymentsPath = simMode
+    ? process.env.COTI_DEPLOYMENTS_PATH ||
+      path.resolve(process.cwd(), "deployments", config.cotiDeploymentsFile.replace("coti-testnet", "sim-coti"))
+    : process.env.COTI_DEPLOYMENTS_PATH ||
+      path.resolve(process.cwd(), "deployments", config.cotiDeploymentsFile);
 
-  logStep("Preparing chain clients");
+  logStep(`Preparing chain clients (${backend}, ${config.podAdderContractName})`);
   const cotiChain = defineChain({
     id: Number(cotiChainId),
-    name: "COTI Testnet",
+    name: simMode ? "simCoti" : "COTI Testnet",
     nativeCurrency: { name: "COTI", symbol: "COTI", decimals: 18 },
     rpcUrls: {
       default: { http: [cotiRpcUrl] },
@@ -1283,6 +1444,7 @@ export const setupContextWideMpc = async (
 
   const reuseSepolia = !!(inboxSepoliaAddress && mpcAdderAddress);
   let reuseCoti =
+    !simMode &&
     envOrEmpty("COTI_REUSE_CONTRACTS").toLowerCase() === "true" &&
     !!inboxCotiAddress &&
     !!mpcExecutorAddress;
@@ -1414,12 +1576,27 @@ export const setupContextWideMpc = async (
     logStep("Sepolia miner already configured");
   }
 
-  const cotiProvider = new JsonRpcProvider(cotiRpcUrl) as any;
-  const cotiPrivateKey = await resolveCotiTestnetPrivateKey(cotiRpcUrl);
-  const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
-  const userKey = await onboardUser(cotiPrivateKey, cotiRpcUrl, onboardAddress);
-  const cotiEncryptWallet = new CotiWallet(cotiPrivateKey, cotiProvider as any);
-  cotiEncryptWallet.setAesKey(userKey);
+  const cotiPrivateKey = simMode ? cotiPrivateKeyMain : await resolveCotiTestnetPrivateKey(cotiRpcUrl);
+
+  let userKey: string;
+  let cotiEncryptWallet: CotiWallet | SimWallet;
+  if (simMode) {
+    const simCrypto = await setupSimCrypto({
+      cotiViem: params.cotiViem,
+      cotiPrivateKey,
+      cotiAccount,
+      cotiPublicClient,
+      cotiWallet: { account: cotiWallet.account },
+    });
+    userKey = simCrypto.userKey;
+    cotiEncryptWallet = simCrypto.cotiEncryptWallet;
+  } else {
+    const cotiProvider = new JsonRpcProvider(cotiRpcUrl) as any;
+    const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
+    userKey = await onboardUser(cotiPrivateKey, cotiRpcUrl, onboardAddress);
+    cotiEncryptWallet = new CotiWallet(cotiPrivateKey, cotiProvider as any);
+    cotiEncryptWallet.setAesKey(userKey);
+  }
 
   logStep("Setup complete");
 
@@ -1440,11 +1617,18 @@ export const setupContextWideMpc = async (
 };
 
 export async function getCotiCrypto(privateKey: string, rpcUrl: string, keyEnv: string) {
-  const cotiProvider = new JsonRpcProvider(rpcUrl) as any;
   const normalizedKey = normalizePrivateKey(privateKey);
-  const cotiEncryptWallet = new CotiWallet(normalizedKey, cotiProvider as any);
   const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
   const userKey = await onboardUser(normalizedKey, rpcUrl, onboardAddress, keyEnv);
+  if (isSimCotiBackend()) {
+    const cotiEncryptWallet = new SimWallet(normalizedKey as `0x${string}`, { send: async () => null } as any, {
+      chainId: SIM_COTI_CHAIN_ID,
+      aesKey: userKey,
+    });
+    return { cotiEncryptWallet, userKey };
+  }
+  const cotiProvider = new JsonRpcProvider(rpcUrl) as any;
+  const cotiEncryptWallet = new CotiWallet(normalizedKey, cotiProvider as any);
   cotiEncryptWallet.setAesKey(userKey);
   return { cotiEncryptWallet, userKey };
 }
@@ -1518,19 +1702,41 @@ export const setupPodTestContext = async (params: {
   /** When true with `COTI_REUSE_CONTRACTS=true`, redeploy only `MpcExecutor` and keep the cached inbox. */
   forceRedeployCotiExecutor?: boolean;
 }): Promise<PodTestContext> => {
-  const cotiRpcUrl = requireEnv("COTI_TESTNET_RPC_URL");
-  const cotiPrivateKeyMain = normalizePrivateKey(await resolveCotiTestnetPrivateKey(cotiRpcUrl));
+  const backend = resolveCotiBackend();
+  const simMode = backend === "sim";
+
+  if (simMode) {
+    await injectSimCotiPrecompile(params.cotiViem);
+    await injectSimCotiPrecompile(params.sepoliaViem);
+  }
+
+  const cotiRpcUrl = simMode ? "http://127.0.0.1:8545" : requireEnv("COTI_TESTNET_RPC_URL");
+  const cotiPrivateKeyMain = simMode
+    ? normalizePrivateKey(
+        process.env.PRIVATE_KEY?.trim() ||
+          process.env.COTI_TESTNET_PRIVATE_KEY?.trim() ||
+          process.env._PRIVATE_KEY?.trim() ||
+          (() => {
+            throw new Error("Missing PRIVATE_KEY for simCoti tests");
+          })()
+      )
+    : normalizePrivateKey(await resolveCotiTestnetPrivateKey(cotiRpcUrl));
 
   const { hh, sep } = podTestEnvKeys(params.podContractName);
   const sepoliaChainId = parseInt(process.env.HARDHAT_CHAIN_ID || "31337");
-  const cotiChainId = BigInt(parseInt(process.env.COTI_TESTNET_CHAIN_ID || "7082400"));
-  const cotiDeploymentsPath =
-    process.env.COTI_DEPLOYMENTS_PATH || path.resolve(process.cwd(), "deployments", "coti-testnet.json");
+  const cotiChainId = simMode
+    ? BigInt(SIM_COTI_CHAIN_ID)
+    : BigInt(parseInt(process.env.COTI_TESTNET_CHAIN_ID || "7082400"));
+  const cotiDeploymentsPath = simMode
+    ? process.env.COTI_DEPLOYMENTS_PATH ||
+      path.resolve(process.cwd(), "deployments", "sim-coti-pod-ops.json")
+    : process.env.COTI_DEPLOYMENTS_PATH ||
+      path.resolve(process.cwd(), "deployments", "coti-testnet.json");
 
-  logStep("Preparing chain clients (pod test harness)");
+  logStep(`Preparing chain clients (pod test harness, ${backend})`);
   const cotiChain = defineChain({
     id: Number(cotiChainId),
-    name: "COTI Testnet",
+    name: simMode ? "simCoti" : "COTI Testnet",
     nativeCurrency: { name: "COTI", symbol: "COTI", decimals: 18 },
     rpcUrls: {
       default: { http: [cotiRpcUrl] },
@@ -1553,7 +1759,7 @@ export const setupPodTestContext = async (params: {
     envOrEmpty("COTI_MPC_EXECUTOR_ADDRESS") || cachedCoti.mpcExecutor || "";
 
   const reuseSepolia = !!(inboxSepoliaAddress && podAddress);
-  const envReuseCoti = envOrEmpty("COTI_REUSE_CONTRACTS").toLowerCase() === "true";
+  const envReuseCoti = !simMode && envOrEmpty("COTI_REUSE_CONTRACTS").toLowerCase() === "true";
   const cotiHasCache = !!inboxCotiAddress && !!mpcExecutorAddress;
   const forceRedeployCotiExecutor = params.forceRedeployCotiExecutor === true;
   let reuseCotiFull = envReuseCoti && cotiHasCache && !forceRedeployCotiExecutor;
@@ -1702,12 +1908,27 @@ export const setupPodTestContext = async (params: {
     logStep("Sepolia miner already configured");
   }
 
-  const cotiProvider = new JsonRpcProvider(cotiRpcUrl) as any;
-  const cotiPrivateKey = await resolveCotiTestnetPrivateKey(cotiRpcUrl);
-  const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
-  const userKey = await onboardUser(cotiPrivateKey, cotiRpcUrl, onboardAddress);
-  const cotiEncryptWallet = new CotiWallet(cotiPrivateKey, cotiProvider as any);
-  cotiEncryptWallet.setAesKey(userKey);
+  const cotiPrivateKey = simMode ? cotiPrivateKeyMain : await resolveCotiTestnetPrivateKey(cotiRpcUrl);
+
+  let userKey: string;
+  let cotiEncryptWallet: CotiWallet | SimWallet;
+  if (simMode) {
+    const simCrypto = await setupSimCrypto({
+      cotiViem: params.cotiViem,
+      cotiPrivateKey,
+      cotiAccount,
+      cotiPublicClient,
+      cotiWallet: { account: cotiWallet.account },
+    });
+    userKey = simCrypto.userKey;
+    cotiEncryptWallet = simCrypto.cotiEncryptWallet;
+  } else {
+    const cotiProvider = new JsonRpcProvider(cotiRpcUrl) as any;
+    const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
+    userKey = await onboardUser(cotiPrivateKey, cotiRpcUrl, onboardAddress);
+    cotiEncryptWallet = new CotiWallet(cotiPrivateKey, cotiProvider as any);
+    cotiEncryptWallet.setAesKey(userKey);
+  }
 
   logStep("Pod test setup complete");
 
