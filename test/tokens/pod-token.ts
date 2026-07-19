@@ -21,6 +21,7 @@ import {
   completePodOpRoundTrip,
   encryptAmount,
   encryptAmountAsBob,
+  mineLatestOutboundRoundTrip,
   mineOutboundRoundTripForRequest,
   mintOnCoti,
   mintOnCotiAndSync,
