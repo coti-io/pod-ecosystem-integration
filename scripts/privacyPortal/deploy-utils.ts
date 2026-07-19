@@ -231,13 +231,11 @@ export const createSourcePortalAndPToken = async (
     symbol: string;
     decimals?: number;
     nativeWrappedUnderlying?: boolean;
-    portalOwner?: `0x${string}`;
     cotiCtx?: ConnectedNetwork;
     cotiMother?: `0x${string}`;
     cotiChainId?: bigint;
   }
 ): Promise<SourcePortalDeployment> => {
-  const portalOwner = params.portalOwner ?? ctx.deployer;
   const decimals = params.decimals ?? 18;
   const factory = await ctx.viem.getContractAt("PrivacyPortalFactory", params.factory, {
     client: { public: ctx.publicClient, wallet: ctx.walletClient },
@@ -245,7 +243,7 @@ export const createSourcePortalAndPToken = async (
 
   console.log(`[privacyPortal] creating portal pair underlying=${params.underlying}...`);
   const hash = await factory.write.createPortal(
-    [params.underlying, params.name, params.symbol, decimals, params.nativeWrappedUnderlying ?? false, portalOwner],
+    [params.underlying, params.name, params.symbol, decimals, params.nativeWrappedUnderlying ?? false],
     { account: ctx.deployer, value: 2_500_000_000_000n }
   );
   await waitMined(ctx.publicClient, hash);

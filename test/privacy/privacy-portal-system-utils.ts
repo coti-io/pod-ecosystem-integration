@@ -75,10 +75,9 @@ export async function setupPrivacyPortalSystemContext(params: {
     "pTUSD",
   ]);
 
-  await portal.write.initialize([owner, underlying.address, pod.address, 18, false], {
+  await portal.write.initialize([underlying.address, pod.address, 18, false, mockFactory.address], {
     account: owner,
   });
-  await portal.write.setPauseController([mockFactory.address], { account: owner });
 
   ppLog("fund portal and pToken with native inbox fees");
   await fundContractForInboxFees(hardhatCotiWallet, base.sepolia.publicClient, pod.address as `0x${string}`);

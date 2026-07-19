@@ -569,7 +569,6 @@ const buildPpTokenTargets = (): Target[] => {
               t.pSymbol,
               t.decimals,
               t.canonicalKey === "WETH" || t.canonicalKey === "WAVAX",
-              factoryOwner(ctx),
             ],
             { account: ctx.deployer, value: 1_000_000_000_000_000n }
           );

@@ -82,10 +82,13 @@ export default defineConfig({
     // Do not set `path` to soljson.js — that forces the WASM compiler, which OOMs on
     // aarch64 when compiling vendored MpcCore.sol. Let Hardhat download the native
     // linux-arm64 binary instead (see preferWasm: false).
+    //
+    // `paris`: COTI testnet rejects Shanghai `PUSH0`. Keep the whole tree on Paris so
+    // Inbox / MpcExecutor / mothers deploy without Shanghai+ opcodes.
     version: "0.8.28",
     preferWasm: false,
     settings: {
-      evmVersion: "cancun",
+      evmVersion: "paris",
       viaIR: true,
       optimizer: {
         enabled: true,

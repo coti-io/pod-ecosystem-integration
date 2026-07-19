@@ -379,7 +379,8 @@ export const HARDHAT_EDR_TX_GAS_CAP = 16_777_216n;
 
 /** viem `writeContract` options attaching the two-way native payment from {@link estimateGas}. */
 export function podTwoWayWriteOptions(fees: PodTwoWayFeeEstimate): { value: bigint } {
-  return { value: fees.totalValueWei };
+  // Small pad absorbs Hardhat base-fee drift between setup-time estimate and later sends.
+  return { value: fees.totalValueWei + fees.totalValueWei / 20n };
 }
 
 /** Minimum context for sweeping native fees from both inbox deployments. */

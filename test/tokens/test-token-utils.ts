@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import { JsonRpcProvider } from "ethers";
 import { privateKeyToAccount } from "viem/accounts";
-import { decryptUint } from "@coti-io/coti-sdk-typescript";
+import { decryptUint, prepareIT256 } from "@coti-io/coti-sdk-typescript";
 import { ONBOARD_CONTRACT_ADDRESS, transferNative, Wallet as CotiWallet } from "@coti-io/coti-ethers";
-import { encodeFunctionData, parseAbi } from "viem";
+import { createWalletClient, custom, encodeFunctionData, decodeAbiParameters, parseAbi, parseEther, toFunctionSelector, toHex } from "viem";
 import {
   buildEncryptedInput256,
   decodeCtUint256,
   decryptUint256,
   fundContractForInboxFees,
   getLatestRequest,
+  getResponseRequestBySource,
   logStep,
   mineRequest,
   normalizePrivateKey,
@@ -46,9 +47,11 @@ export type PodTokenTestContext = {
   pod: any;
   /** Same Hardhat `PodErc20Mintable` instance, wallet = COTI-funded owner (cross-chain test pattern). */
   podAsCoti: any;
+  /** Same Hardhat pToken, wallet = Bob (for concurrent-sender / receiver-not-locked cases). */
+  podAsBob: any;
   podCotiMother: any;
   owner: `0x${string}`;
-  bob: { address: `0x${string}`; userKey: string; wallet: CotiWallet };
+  bob: { address: `0x${string}`; privateKey: `0x${string}`; userKey: string; wallet: CotiWallet };
 };
 
 const deriveSecondaryPrivateKey = (primaryKey: string) => {
@@ -110,6 +113,7 @@ export async function setupFundedUnonboardedUser(
 /** Funds and onboards a second account (Bob) for balance decryption on transfers. */
 export async function setupBobUser(primaryPrivateKey: string): Promise<{
   address: `0x${string}`;
+  privateKey: `0x${string}`;
   userKey: string;
   wallet: CotiWallet;
 }> {
@@ -155,7 +159,12 @@ export async function setupBobUser(primaryPrivateKey: string): Promise<{
 
   const userKey = await onboardUser(normalizedKey, cotiRpcUrl, onboardAddress, "COTI_AES_KEY_BOB");
   wallet.setAesKey(userKey);
-  return { address: wallet.address as `0x${string}`, userKey, wallet };
+  return {
+    address: wallet.address as `0x${string}`,
+    privateKey: normalizedKey,
+    userKey,
+    wallet,
+  };
 }
 
 /** Inbox + miners + `PodERC20` on Hardhat + `PodErc20CotiMother` on COTI with factory registration. */
@@ -204,9 +213,27 @@ export async function setupPodTokenTestContext(params: {
   });
 
   const bob = await setupBobUser(cotiPk);
+  const bobAccount = privateKeyToAccount(bob.privateKey);
+  const hardhatTransport = custom({
+    request: (args) => base.sepolia.publicClient.request(args),
+  });
+  const [hardhatFunder] = await params.sepoliaViem.getWalletClients();
+  const bobHardhatBalance = await base.sepolia.publicClient.getBalance({ address: bob.address });
+  if (bobHardhatBalance < parseEther("0.5")) {
+    const fundHash = await hardhatFunder.sendTransaction({ to: bob.address, value: parseEther("1") });
+    await base.sepolia.publicClient.waitForTransactionReceipt({ hash: fundHash, ...receiptWaitOptions });
+  }
+  const bobHardhatWallet = createWalletClient({
+    account: bobAccount,
+    chain: base.sepolia.publicClient.chain,
+    transport: hardhatTransport,
+  });
+  const podAsBob = await params.sepoliaViem.getContractAt("PodErc20Mintable", pod.address, {
+    client: { public: base.sepolia.publicClient, wallet: bobHardhatWallet },
+  });
 
   logStep("Pod token setup complete");
-  return { base, pod, podAsCoti, podCotiMother, owner, bob };
+  return { base, pod, podAsCoti, podAsBob, podCotiMother, owner, bob };
 }
 
 /** Native wei for `sendOneWayMessage` registration (matches `PrivacyPortalFactory.createPortal` default). */
@@ -409,13 +436,49 @@ export function encryptAmount(ctx: PodTokenTestContext, amount: bigint) {
   return buildEncryptedInput256(ctx.base, amount);
 }
 
-/** UTF-8 string from revert / raise payload bytes returned by `failedRequests`. */
+/**
+ * Encrypt+sign an amount with Bob's AES key / ECDSA key (for wrong-signer system-error tests).
+ * Uses the same inbox `batchProcessRequests` selector as {@link buildEncryptedInput256}.
+ */
+export function encryptAmountAsBob(ctx: PodTokenTestContext, amount: bigint) {
+  const functionSelector = toFunctionSelector(
+    "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[])"
+  );
+  const it = prepareIT256(
+    amount,
+    {
+      wallet: ctx.bob.wallet as any,
+      userKey: ctx.bob.userKey,
+    },
+    ctx.base.contracts.inboxCoti.address,
+    functionSelector
+  );
+  const signature =
+    typeof it.signature === "string"
+      ? (it.signature as `0x${string}`)
+      : toHex(it.signature as any);
+  return {
+    ciphertext: it.ciphertext,
+    signature,
+  };
+}
+
+/** UTF-8 string from app-raise `failedRequests` bytes (raw reason) or system {ErrorData}.message. */
 export function utf8FromFailedRequestBytes(hex: `0x${string}`): string {
   if (!hex || hex === "0x") {
     return "";
   }
-  const slice = hex.startsWith("0x") ? hex.slice(2) : hex;
-  return Buffer.from(slice, "hex").toString("utf8");
+  try {
+    const [, message] = decodeAbiParameters([{ type: "uint64" }, { type: "bytes" }], hex);
+    const msgHex = message as `0x${string}`;
+    if (!msgHex || msgHex === "0x") {
+      return "";
+    }
+    return Buffer.from(msgHex.slice(2), "hex").toString("utf8");
+  } catch {
+    const slice = hex.startsWith("0x") ? hex.slice(2) : hex;
+    return Buffer.from(slice, "hex").toString("utf8");
+  }
 }
 
 /**
@@ -445,6 +508,33 @@ export async function mineLatestOutboundRoundTrip(
     ...mineOptions,
     gas: mineOptions?.gas ?? getDefaultCotiMineGasPodToken(),
   });
+}
+
+/** Mines a specific PoD→COTI outbound request (and its Hardhat return leg). Use when multiple are queued. */
+export async function mineOutboundRoundTripForRequest(
+  ctx: PodTokenTestContext,
+  outboundRequest: Awaited<ReturnType<typeof getLatestRequest>>,
+  label: string,
+  mineOptions?: MineRequestOptions
+): Promise<{ cotiIncomingRequestId: `0x${string}` }> {
+  const gas = mineOptions?.gas ?? getDefaultCotiMineGasPodToken();
+  const { requestIdUsed: cotiIncomingRequestId } = await mineRequest(
+    ctx.base,
+    "coti",
+    BigInt(ctx.base.chainIds.sepolia),
+    outboundRequest,
+    label,
+    { ...mineOptions, gas }
+  );
+  const returnLegRequest = await getResponseRequestBySource(
+    ctx.base.contracts.inboxCoti,
+    cotiIncomingRequestId,
+    label
+  );
+  await mineRequest(ctx.base, "sepolia", ctx.base.chainIds.coti, returnLegRequest, label, {
+    nonceOverride: mineOptions?.nonceOverride,
+  });
+  return { cotiIncomingRequestId };
 }
 
 export function assertIncludesInsensitive(haystack: string, needle: string) {

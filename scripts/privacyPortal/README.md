@@ -53,7 +53,7 @@ Set `"adapter": "band"` on a chain to deploy `BandLiveOracle` instead (configure
 | **PriceOracle** | Deploy live adapter + `PoDPriceOracle` (or plain `PriceOracle` when `adapter: "plain"`); records `priceOracle`, `oracle.liveAdapter`, `oracle.adapter` |
 | **WireInboxOracle** | `Inbox.setPriceOracle` — uses `consumers.inbox` or `priceOracle` |
 | **WireFactoryOracle** | `PrivacyPortalFactory.setPriceOracle` — uses `consumers.privacyPortalFactory` or `priceOracle` |
-| **PpFactory** | Deploys factory; constructor oracle = `consumers.privacyPortalFactory` or `priceOracle` (zero if unset — wire later) |
+| **PpFactory** | Deploys factory; constructor oracle = `consumers.privacyPortalFactory` or `priceOracle` (zero if unset — wire later). Optional `privacyPortalFactoryConstructor.feeRecipient` / `rescueRecipient` override the factory owner defaults. |
 | **FeeConfig** | Applies inbox min-fee templates from `feeConfig` |
 | **PpPortalFee** | Applies factory default portal protocol fees from `portalFee` |
 
@@ -64,6 +64,19 @@ DEPLOY_CLI_NETWORK=sepolia DEPLOY_CLI_TARGETS=inbox,priceOracle,feeConfig,wireIn
 ```
 
 `portalFee` lives under `chains[chainId].portalFee` with `deposit` and `withdraw` legs, each `{ fixedFee, percentageBps, maxFee }` (native wei; `percentageBps` / 1_000_000). **PpPortalFee** compares on-chain factory defaults via `getFeeConfig` and calls `setDefaultDepositFee` / `setDefaultWithdrawFee` when they differ. Sign with the factory owner (`PRIVATE_KEY` / `FACTORY_OWNER`).
+
+Optional deploy-time snapshot under `chains[chainId].privacyPortalFactoryConstructor`:
+
+```json
+"privacyPortalFactoryConstructor": {
+  "feeRecipient": "0x…",
+  "rescueRecipient": "0x…",
+  "priceOracle": "0x…",
+  "portalFee": { "deposit": { … }, "withdraw": { … } }
+}
+```
+
+`feeRecipient` / `rescueRecipient` default to the factory owner when omitted. `feeRecipient` is immutable after deploy; admin may later call `setRescueRecipient` (`DEFAULT_ADMIN_ROLE`).
 
 After deploying a new oracle, run **WireInboxOracle** and **WireFactoryOracle** to switch live contracts. Keeper: call `oracle.refreshCache()` periodically for **inbox** fee validation only (portal fees are live per tx).
 

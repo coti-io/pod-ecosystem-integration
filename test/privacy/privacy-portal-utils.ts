@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { encodePacked, getAddress, keccak256, zeroAddress, zeroHash, type PublicClient, type WalletClient } from "viem";
 import { oracleTokensForChain } from "../../scripts/oracle-tokens.js";
+import { deployInboxWithInit } from "../system/mpc-test-utils.js";
 
 export const RECIPIENT = "0x00000000000000000000000000000000000000b0" as `0x${string}`;
 
@@ -71,10 +72,10 @@ export async function deployDirectPortalContext(params: {
   const portal = await params.viem.getContractAt("PrivacyPortal", portalAddress, {
     client: { public: params.publicClient, wallet: params.wallet },
   });
-  await portal.write.initialize([params.owner, underlying.address, pToken.address, 18, false], {
-    account: params.owner,
-  });
-  await portal.write.setPauseController([mockFactory.address], { account: params.owner });
+  await portal.write.initialize(
+    [underlying.address, pToken.address, 18, false, mockFactory.address],
+    { account: params.owner }
+  );
 
   return {
     viem: params.viem,
@@ -136,10 +137,10 @@ export async function deployNativePortalContext(params: {
   const portal = await params.viem.getContractAt("PrivacyPortal", portalAddress, {
     client: { public: params.publicClient, wallet: params.wallet },
   });
-  await portal.write.initialize([params.owner, underlying.address, pToken.address, 18, true], {
-    account: params.owner,
-  });
-  await portal.write.setPauseController([mockFactory.address], { account: params.owner });
+  await portal.write.initialize(
+    [underlying.address, pToken.address, 18, true, mockFactory.address],
+    { account: params.owner }
+  );
 
   return {
     viem: params.viem,
@@ -217,6 +218,22 @@ export async function completePTokenTransferCallback(ctx: PortalTestContext) {
 
 export async function markPTokenTransferSuccessful(ctx: PortalTestContext) {
   await ctx.pToken.write.markLastTransferSuccessful([], writeOpts(ctx));
+}
+
+export async function markPTokenTransferFailed(ctx: PortalTestContext) {
+  await ctx.pToken.write.markLastTransferFailed([], writeOpts(ctx));
+}
+
+export async function markPTokenTransferSystemFailed(ctx: PortalTestContext) {
+  await ctx.pToken.write.markLastTransferSystemFailed([], writeOpts(ctx));
+}
+
+export async function markPTokenMintSystemFailed(ctx: PortalTestContext) {
+  await ctx.pToken.write.markLastMintFailed([], writeOpts(ctx));
+}
+
+export async function markPTokenMintRaised(ctx: PortalTestContext) {
+  await ctx.pToken.write.markLastMintRaised([], writeOpts(ctx));
 }
 
 export async function triggerWithdrawalRelease(ctx: PortalTestContext, withdrawalId: `0x${string}`) {
@@ -320,6 +337,7 @@ export async function deployPortalFactory(
       tokenImplementation.address,
       portalImplementation.address,
       ctx.owner,
+      ctx.owner,
       portalNative,
       params.priceOracle ?? zeroAddress,
       params.depositFixedFee ?? 0n,
@@ -341,7 +359,7 @@ export async function deployFactoryPortalPair(ctx: PortalTestContext) {
   });
 
   await factory.write.createPortal(
-    [underlying.address, "Private SEC", "pSEC", 6, false, ctx.owner],
+    [underlying.address, "Private SEC", "pSEC", 6, false],
     { ...writeOpts(ctx), value: 2_500_000_000_000n }
   );
 
