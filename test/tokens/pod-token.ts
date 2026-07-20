@@ -20,7 +20,6 @@ import {
   completePodOpRoundTrip,
   encryptAmount,
   encryptAmountAsBob,
-  mineLatestOutboundRoundTrip,
   mineOutboundRoundTripForRequest,
   mintOnCoti,
   mintOnCotiAndSync,
@@ -203,42 +202,55 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     pt("case receiver not locked: done");
   });
 
-  it("reverts with TransferAlreadyPending while a transfer is in flight", async function () {
-    pt("case pending guard: start");
+  it("allows concurrent transfers while pendingTransferCount is in flight", async function () {
+    pt("case concurrent pending: start");
     const start = 4_000n;
+    const firstAmt = 100n;
+    const secondAmt = 200n;
     const ownerBefore = await readDecryptedBalance(ctx, ctx.owner);
-    pt(`case pending guard: fund owner ${start}`);
+    pt(`case concurrent pending: fund owner ${start}`);
     await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "pendFund");
     assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerBefore + start);
 
-    pt("case pending guard: submit first transfer (PoD only, not mined yet on COTI)");
-    const itSmall = await encryptAmount(ctx, 100n);
-    const txHash = await ctx.podAsCoti.write.transfer(
+    pt("case concurrent pending: submit first transfer (PoD only, not mined yet on COTI)");
+    const itSmall = await encryptAmount(ctx, firstAmt);
+    const firstTx = await ctx.podAsCoti.write.transfer(
       [ctx.bob.address, itSmall, ctx.base.podTwoWayFees.callbackFeeWei],
       podTwoWayWriteOptions(ctx.base.podTwoWayFees)
     );
-    await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: txHash });
+    await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: firstTx });
+    const firstOutbound = await getLatestRequest(ctx.base.contracts.inboxSepolia, ctx.base.chainIds.coti);
 
     const mid = await readBalanceWithPending(ctx, ctx.owner);
     assert.equal(mid.pending, true);
-    pt("case pending guard: owner pending=true, expect second transfer to revert");
+    assert.equal(await ctx.pod.read.pendingTransferCount([ctx.owner]), 1n);
+    pt("case concurrent pending: owner pendingTransferCount=1, second transfer should succeed");
 
-    const itAnother = await encryptAmount(ctx, 200n);
-    await assert.rejects(
-      () =>
-        ctx.podAsCoti.write.transfer([ctx.bob.address, itAnother, ctx.base.podTwoWayFees.callbackFeeWei], podTwoWayWriteOptions(ctx.base.podTwoWayFees)),
-      (e: unknown) => {
-        const msg = e instanceof Error ? e.message : String(e);
-        return msg.includes("TransferAlreadyPending");
-      }
+    // Pad fee value: a second in-flight two-way can need a slightly higher target-fee slice than the
+    // setup-time estimate (Hardhat base fee drift / concurrent escrow).
+    const secondFeeOpts = { value: ctx.base.podTwoWayFees.totalValueWei + ctx.base.podTwoWayFees.totalValueWei / 10n };
+    const itAnother = await encryptAmount(ctx, secondAmt);
+    const secondTx = await ctx.podAsCoti.write.transfer(
+      [ctx.bob.address, itAnother, ctx.base.podTwoWayFees.callbackFeeWei],
+      secondFeeOpts
     );
+    await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: secondTx });
+    const secondOutbound = await getLatestRequest(ctx.base.contracts.inboxSepolia, ctx.base.chainIds.coti);
 
-    pt("case pending guard: mine round-trip to clear pending");
-    await mineLatestOutboundRoundTrip(ctx, "pendClear");
+    assert.equal(await ctx.pod.read.pendingTransferCount([ctx.owner]), 2n);
+    const mid2 = await readBalanceWithPending(ctx, ctx.owner);
+    assert.equal(mid2.pending, true);
+    pt("case concurrent pending: pendingTransferCount=2, mine both round-trips in order");
+
+    await mineOutboundRoundTripForRequest(ctx, firstOutbound, "pendClearFirst");
+    assert.equal(await ctx.pod.read.pendingTransferCount([ctx.owner]), 1n);
+    await mineOutboundRoundTripForRequest(ctx, secondOutbound, "pendClearSecond");
+
     const end = await readBalanceWithPending(ctx, ctx.owner);
     assert.equal(end.pending, false);
-    assert.equal(end.balance, ownerBefore + start - 100n);
-    pt("case pending guard: done (cleared, balance reduced by 100)");
+    assert.equal(await ctx.pod.read.pendingTransferCount([ctx.owner]), 0n);
+    assert.equal(end.balance, ownerBefore + start - firstAmt - secondAmt);
+    pt("case concurrent pending: done (both settled, count=0, balance reduced by 300)");
   });
 
   it("encrypted insufficient transfer succeeds as no-op without distinct failure", async function () {
