@@ -240,11 +240,23 @@ export async function triggerWithdrawalRelease(ctx: PortalTestContext, withdrawa
   await ctx.portal.write.triggerWithdrawalRelease([withdrawalId], writeOpts(ctx));
 }
 
-export async function burnAccumulatedPTokens(ctx: PortalTestContext, amount: bigint, burnFee = DEFAULT_POD_FEE) {
+/**
+ * Submit a portal batch burn, mark the mock pToken burn Success, then finalize so
+ * `pendingBurnAmount` decrements (PP-07: burn alone only reserves in-flight).
+ */
+export async function burnAccumulatedPTokens(
+  ctx: PortalTestContext,
+  amount: bigint,
+  burnFee = DEFAULT_POD_FEE
+): Promise<`0x${string}`> {
   await ctx.portal.write.burnAccumulatedPTokens([amount, DEFAULT_WITHDRAW.transferCallbackFee], {
     ...writeOpts(ctx),
     value: burnFee,
   });
+  const burnRequestId = (await ctx.pToken.read.lastBurnRequestId()) as `0x${string}`;
+  await ctx.pToken.write.markLastBurnSuccessful([], writeOpts(ctx));
+  await ctx.portal.write.finalizeBatchBurn([burnRequestId], writeOpts(ctx));
+  return burnRequestId;
 }
 
 export async function expectDepositMintSubmitted(

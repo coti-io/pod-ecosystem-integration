@@ -4,7 +4,8 @@
  * These exercises COTI MPC on garbled 256-bit balances (`syncBalances` uses `offBoardToUser` per account). If
  * `batchProcessRequests` fails, try raising `COTI_MINE_GAS_POD_TOKEN`.
  *
- * Run explicitly: `npm run test:pod-token` (sets `POD_TOKEN_SYSTEM_TESTS=1`).
+ * Run explicitly: `npm run test:pod-token` (sets `POD_TOKEN_SYSTEM_TESTS=1` and `COTI_BACKEND=sim`).
+ * Override with live COTI: `COTI_BACKEND=live npm run test:pod-token` (or unset / any non-sim value).
  * Running `hardhat test test/tokens/pod-token.ts` without that env skips the whole suite (`-` in node:test output);
  * skipped suites do not run `before` or `it`, so there are no step logs unless you enable the flag.
  *
@@ -12,9 +13,9 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, before, describe, it } from "node:test";
-import { network } from "hardhat";
 import { decodeAbiParameters, encodeFunctionData } from "viem";
 import { logStep } from "../system/mpc-test-utils.js";
+import { connectDualChainForTests } from "../sim-coti/sim-coti-utils.js";
 import {
   assertIncludesInsensitive,
   completePodOpRoundTrip,
@@ -51,8 +52,8 @@ if (!runPodTokenSystem) {
 const pt = (message: string) => logStep(`pod-token: ${message}`);
 
 d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
-  const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
-  const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
+  // COTI_BACKEND=sim → in-process simCoti; otherwise live cotiTestnet.
+  const { sepoliaViem, cotiViem } = await connectDualChainForTests();
 
   let ctx: PodTokenTestContext;
 
@@ -182,7 +183,10 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
 
     // Pad fee value: a second in-flight two-way can need a slightly higher target-fee slice than the
     // setup-time estimate (Hardhat base fee drift / concurrent escrow).
-    const bobFeeOpts = { value: ctx.base.podTwoWayFees.totalValueWei + ctx.base.podTwoWayFees.totalValueWei / 10n };
+    const bobFeeOpts = {
+      ...podTwoWayWriteOptions(ctx.base.podTwoWayFees),
+      value: ctx.base.podTwoWayFees.totalValueWei + ctx.base.podTwoWayFees.totalValueWei / 10n,
+    };
     const itBobSend = await encryptAmountAsBob(ctx, bobToOwner);
     const bobTx = await ctx.podAsBob.write.transfer(
       [ctx.owner, itBobSend, ctx.base.podTwoWayFees.callbackFeeWei],
@@ -228,7 +232,10 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
 
     // Pad fee value: a second in-flight two-way can need a slightly higher target-fee slice than the
     // setup-time estimate (Hardhat base fee drift / concurrent escrow).
-    const secondFeeOpts = { value: ctx.base.podTwoWayFees.totalValueWei + ctx.base.podTwoWayFees.totalValueWei / 10n };
+    const secondFeeOpts = {
+      ...podTwoWayWriteOptions(ctx.base.podTwoWayFees),
+      value: ctx.base.podTwoWayFees.totalValueWei + ctx.base.podTwoWayFees.totalValueWei / 10n,
+    };
     const itAnother = await encryptAmount(ctx, secondAmt);
     const secondTx = await ctx.podAsCoti.write.transfer(
       [ctx.bob.address, itAnother, ctx.base.podTwoWayFees.callbackFeeWei],
@@ -399,10 +406,11 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     pt("case bad-enc approve: done (retry succeeded, allowance updated)");
   });
 
-  // Matches `MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI` in `test/system/mpc-test-utils.ts`. When we pin `gasPrice` on an
-  // auto-fee tx to this value, the inbox's runtime `tx.gasprice` equals the price used by `estimateGas` in setup,
-  // so the contract's internal `_estimateTwoWayFeeInLocalToken()` produces the exact same (target, caller) split.
-  const FEE_CALC_GAS_PRICE_WEI = 300_529_002n;
+  // Matches `MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI` in `test/system/mpc-test-utils.ts` (InboxFeeManager.DEFAULT_GAS_PRICE).
+  // When we pin `gasPrice` on an auto-fee tx to this value, the inbox's runtime reference gas price equals the
+  // price used by `estimateGas` in setup, so the contract's internal `_estimateTwoWayFeeInLocalToken()` produces
+  // the exact same (target, caller) split.
+  const FEE_CALC_GAS_PRICE_WEI = 2_000_000_000n;
   const FEE_EST_REMOTE_CALL_SIZE = 512n;
   const FEE_EST_CALLBACK_CALL_SIZE = 512n;
   const FEE_EST_REMOTE_EXEC_GAS = 300_000n;
@@ -481,6 +489,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
       ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount], {
         value: totalValue,
         gasPrice: FEE_CALC_GAS_PRICE_WEI,
+        gas: 8_000_000n,
       })
     );
 
@@ -523,6 +532,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
       ctx.podAsCoti.write.approve([ctx.bob.address, itAllow], {
         value: totalValue,
         gasPrice: FEE_CALC_GAS_PRICE_WEI,
+        gas: 8_000_000n,
       })
     );
 

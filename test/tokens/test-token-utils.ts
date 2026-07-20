@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { network } from "hardhat";
 import { JsonRpcProvider } from "ethers";
 import { privateKeyToAccount } from "viem/accounts";
 import { decryptUint, prepareIT256 } from "@coti-io/coti-sdk-typescript";
@@ -24,6 +25,7 @@ import {
   type MineRequestOptions,
   type TestContext,
 } from "../system/mpc-test-utils.js";
+import { isSimCotiBackend } from "../sim-coti/sim-coti-utils.js";
 
 /**
  * Gas for COTI `batchProcessRequests` in pod-token tests (`syncBalances` runs `offBoardToUser` per account in one tx).
@@ -111,56 +113,74 @@ export async function setupFundedUnonboardedUser(
 }
 
 /** Funds and onboards a second account (Bob) for balance decryption on transfers. */
-export async function setupBobUser(primaryPrivateKey: string): Promise<{
+export async function setupBobUser(
+  primaryPrivateKey: string,
+  opts?: { cotiViem?: any }
+): Promise<{
   address: `0x${string}`;
   privateKey: `0x${string}`;
   userKey: string;
   wallet: CotiWallet;
 }> {
-  const cotiRpcUrl = requireEnv("COTI_TESTNET_RPC_URL");
+  const simBackend = isSimCotiBackend();
+  const cotiRpcUrl = simBackend
+    ? process.env.SIM_COTI_RPC_URL || process.env.COTI_TESTNET_RPC_URL || "http://127.0.0.1:8546"
+    : requireEnv("COTI_TESTNET_RPC_URL");
   const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
   const normalizedKey = deriveSecondaryPrivateKey(primaryPrivateKey);
+  const bobAccount = privateKeyToAccount(normalizedKey);
   const provider = new JsonRpcProvider(cotiRpcUrl) as any;
   const fundingWallet = new CotiWallet(normalizePrivateKey(primaryPrivateKey), provider);
   const wallet = new CotiWallet(normalizedKey, provider);
 
-  const balance = await provider.getBalance(wallet.address);
-  const minBalance = 300_000_000_000_000_000n;
-  if (balance < minBalance) {
-    logStep("Funding Bob for COTI onboarding");
-    let funded = false;
-    for (let attempt = 0; attempt < 4 && !funded; attempt++) {
-      if (attempt > 0) {
-        logStep(`Bob funding retry ${attempt} (nonce / fee)`);
-        await new Promise((r) => setTimeout(r, 5_000));
+  if (!simBackend) {
+    const balance = await provider.getBalance(wallet.address);
+    const minBalance = 300_000_000_000_000_000n;
+    if (balance < minBalance) {
+      logStep("Funding Bob for COTI onboarding");
+      let funded = false;
+      for (let attempt = 0; attempt < 4 && !funded; attempt++) {
+        if (attempt > 0) {
+          logStep(`Bob funding retry ${attempt} (nonce / fee)`);
+          await new Promise((r) => setTimeout(r, 5_000));
+        }
+        try {
+          const tx = await transferNative(
+            provider,
+            fundingWallet,
+            wallet.address,
+            1_000_000_000_000_000_000n,
+            100_000
+          );
+          funded = !!tx;
+        } catch (e) {
+          logStep(`Bob funding attempt failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
       }
-      try {
-        const tx = await transferNative(
-          provider,
-          fundingWallet,
-          wallet.address,
-          1_000_000_000_000_000_000n,
-          100_000
-        );
-        funded = !!tx;
-      } catch (e) {
-        logStep(`Bob funding attempt failed: ${e instanceof Error ? e.message : String(e)}`);
+      if (!funded) {
+        throw new Error("Failed to fund Bob after retries.");
       }
     }
-    if (!funded) {
-      throw new Error("Failed to fund Bob after retries.");
-    }
-  }
 
-  const fundedBalance = await provider.getBalance(wallet.address);
-  if (fundedBalance < minBalance) {
-    throw new Error(`Bob balance still too low: ${fundedBalance}`);
+    const fundedBalance = await provider.getBalance(wallet.address);
+    if (fundedBalance < minBalance) {
+      throw new Error(`Bob balance still too low: ${fundedBalance}`);
+    }
   }
 
   const userKey = await onboardUser(normalizedKey, cotiRpcUrl, onboardAddress, "COTI_AES_KEY_BOB");
+  if (simBackend) {
+    const { registerUserOnSim } = await import("../sim-coti/sim-coti-utils.js");
+    const cotiViem =
+      opts?.cotiViem ?? (await network.connect({ network: "simCoti" })).viem;
+    // Owner (Hardhat #0) signs the simRegisterUserKey write for Bob.
+    const [signer] = await cotiViem.getWalletClients();
+    await registerUserOnSim(cotiViem, bobAccount.address, userKey, signer.account);
+    logStep(`simCoti: registered Bob AES key for ${bobAccount.address}`);
+  }
   wallet.setAesKey(userKey);
   return {
-    address: wallet.address as `0x${string}`,
+    address: bobAccount.address,
     privateKey: normalizedKey,
     userKey,
     wallet,
@@ -212,7 +232,7 @@ export async function setupPodTokenTestContext(params: {
     client: { public: base.sepolia.publicClient, wallet: hardhatCotiWallet },
   });
 
-  const bob = await setupBobUser(cotiPk);
+  const bob = await setupBobUser(cotiPk, { cotiViem: params.cotiViem });
   const bobAccount = privateKeyToAccount(bob.privateKey);
   const hardhatTransport = custom({
     request: (args) => base.sepolia.publicClient.request(args),

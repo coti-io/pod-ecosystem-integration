@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { privateKeyToAccount } from "viem/accounts";
-import { parseSignature } from "viem";
+import { parseEventLogs, parseSignature } from "viem";
 import {
   fundContractForInboxFees,
   logStep,
@@ -102,7 +102,7 @@ export async function setupPrivacyPortalSystemContext(params: {
     client: { public: base.sepolia.publicClient, wallet: hardhatCotiWallet },
   });
 
-  const bob = await setupBobUser(cotiPk);
+  const bob = await setupBobUser(cotiPk, { cotiViem: params.cotiViem });
 
   ppLog(
     `setup complete (owner=${owner}, portal=${portal.address}, pToken=${pod.address}, mother=${podCotiMother.address})`
@@ -255,12 +255,31 @@ export async function withdrawAndComplete(
     account: ctx.owner,
     value: fees.totalValueWei,
   });
-  await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: burnHash, ...receiptWaitOptions });
+  const burnReceipt = await ctx.base.sepolia.publicClient.waitForTransactionReceipt({
+    hash: burnHash,
+    ...receiptWaitOptions,
+  });
+  const burnSubmitted = parseEventLogs({
+    abi: ctx.portal.abi,
+    logs: burnReceipt.logs,
+    eventName: "BatchBurnSubmitted",
+  });
+  assert.ok(burnSubmitted.length > 0, "BatchBurnSubmitted event missing");
+  const burnRequestId = burnSubmitted[0].args.burnRequestId as `0x${string}`;
 
   ppLog(`${params.label}: mine batch burn leg`);
   await runCrossChainTwoWayRoundTrip(ctx.base, `${params.label}:burn`, {
     ...params.mineOptions,
     gas: params.mineOptions?.gas ?? getDefaultCotiMineGasPodToken(),
+  });
+
+  ppLog(`${params.label}: finalizeBatchBurn ${burnRequestId}`);
+  const finalizeHash = await ctx.portal.write.finalizeBatchBurn([burnRequestId], {
+    account: ctx.owner,
+  });
+  await ctx.base.sepolia.publicClient.waitForTransactionReceipt({
+    hash: finalizeHash,
+    ...receiptWaitOptions,
   });
 
   const released = (await ctx.underlying.read.balanceOf([recipient])) as bigint;

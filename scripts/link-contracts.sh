@@ -9,6 +9,7 @@ POD="${ROOT}/../coti-contracts/contracts/pod"
 MPC_SRC="${ROOT}/../pod-mpc-lib/contracts/utils/mpc"
 # COTI-side executor + test harness live in pod-mpc-lib (not coti-contracts).
 EXECUTOR_SRC="${ROOT}/../pod-mpc-lib/contracts/mpc/coti-side"
+SIM_COTI_SRC="${ROOT}/../sim-coti-node/contracts"
 
 if [[ ! -d "$INBOX" || ! -d "$POD" ]]; then
   echo "error: clone coti-pod-inbox-contracts and coti-contracts as siblings" >&2
@@ -48,6 +49,15 @@ if [[ -d "$EXECUTOR_SRC" ]]; then
   echo "  executor: ${EXECUTOR_SRC} -> ${EXECUTOR_DST}"
 else
   echo "warning: pod-mpc-lib coti-side not found at ${EXECUTOR_SRC}; MpcExecutor will be missing" >&2
+fi
+
+# simCoti fake MPC precompile helpers (COTI_BACKEND=sim dual-chain tests)
+if [[ -d "$SIM_COTI_SRC" ]]; then
+  mkdir -p "$CONTRACTS/sim-coti"
+  rsync -a --exclude 'test/' "$SIM_COTI_SRC/" "$CONTRACTS/sim-coti/"
+  echo "  sim-coti: ${SIM_COTI_SRC} -> ${CONTRACTS}/sim-coti"
+else
+  echo "warning: sim-coti-node contracts not found at ${SIM_COTI_SRC}; COTI_BACKEND=sim inject will fail" >&2
 fi
 
 echo "Mirrored contracts -> ${CONTRACTS}/"

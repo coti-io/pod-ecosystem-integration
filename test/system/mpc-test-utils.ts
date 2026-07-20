@@ -259,7 +259,7 @@ const MPC_SYSTEM_INBOX_REMOTE_MIN_FEE = {
 export const DEFAULT_MINED_TARGET_EXECUTION_GAS = 2_500_000n;
 
 /** Same as `InboxFeeManager.DEFAULT_GAS_PRICE` — wei per gas passed to `calculateTwoWayFeeRequiredInLocalToken` in setup. */
-const MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI = 300529002;
+const MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI = 2_000_000_000;
 /** Calldata size terms for the two-way fee helper (reasonable MPC payload headroom vs. `test/InboxFeeCalculation.ts`). */
 const MPC_FEE_CALC_CALL_SIZE = 512n;
 /** Extra execution gas terms for `calculateTwoWayFeeRequired` — 0 so estimates match `validateAndPrepareTwoWayFees` minima (template already includes `callbackExecutionGas`). */
@@ -327,6 +327,15 @@ export async function ensureMpcInboxOracleAndFees(params: {
   );
   await waitMined(publicClient, feeHash);
   logStep(`${label}: updateMinFeeConfigs applied`);
+
+  // Pin fee→gas conversion to the same assumed price used by {@link estimateGas} (POD-07).
+  // Without this, Hardhat basefee / minGasPriceWei floors shrink gas-unit budgets and trip CallbackFeeTooLow.
+  const boundsHash = await inbox.write.setGasPriceBounds(
+    [0n, BigInt(MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI), BigInt(MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI)],
+    { account: deployer }
+  );
+  await waitMined(publicClient, boundsHash);
+  logStep(`${label}: setGasPriceBounds pinned to estimate assumed gas price`);
 }
 
 /** Extra gas on the `batchProcessRequests` tx so the inbox can forward `targetFee` to the subcall (EIP-150). */
@@ -398,9 +407,13 @@ async function applyCotiBatchTxFeePerGasCap(
 export const HARDHAT_EDR_TX_GAS_CAP = 16_777_216n;
 
 /** viem `writeContract` options attaching the two-way native payment from {@link estimateGas}. */
-export function podTwoWayWriteOptions(fees: PodTwoWayFeeEstimate): { value: bigint } {
+export function podTwoWayWriteOptions(fees: PodTwoWayFeeEstimate): { value: bigint; gas: bigint } {
   // Small pad absorbs Hardhat base-fee drift between setup-time estimate and later sends.
-  return { value: fees.totalValueWei + fees.totalValueWei / 20n };
+  // Explicit gas: Hardhat EDR eth_estimateGas can under-estimate PoD two-way sends after POD-07 fee bounds.
+  return {
+    value: fees.totalValueWei + fees.totalValueWei / 20n,
+    gas: 8_000_000n,
+  };
 }
 
 /** Minimum context for sweeping native fees from both inbox deployments. */
@@ -1273,6 +1286,10 @@ export const setupContext = async (params: {
   const userKey = await onboardUser(cotiPrivateKey, cotiRpcUrl, onboardAddress);
   let cotiEncryptWallet: CotiWallet | SimWallet;
   if (simBackend) {
+    const { registerUserOnSim } = await import("../sim-coti/sim-coti-utils.js");
+    const cotiAccountForSim = privateKeyToAccount(normalizePrivateKey(cotiPrivateKey) as `0x${string}`);
+    await registerUserOnSim(params.cotiViem, cotiAccountForSim.address, userKey, cotiAccountForSim);
+    logStep(`simCoti: registered owner AES key for ${cotiAccountForSim.address}`);
     const provider = {
       send: async () => null,
       getNetwork: async () => ({ chainId: Number(cotiChainId) }),
