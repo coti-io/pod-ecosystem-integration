@@ -62,10 +62,16 @@ export async function setupPrivacyPortalSystemContext(params: {
     18,
   ]);
 
-  ppLog("deploy PrivacyPortal + PodErc20Mintable (minter = portal)");
+  ppLog("deploy PrivacyPortal clone + PodErc20Mintable (minter = portal)");
   const { portalNative } = oracleTokensForChain(11155111);
   const mockFactory = await params.sepoliaViem.deployContract("MockPrivacyPortalFactory", [owner, portalNative]);
-  const portal = await params.sepoliaViem.deployContract("PrivacyPortal", []);
+  const cloneHelper = await params.sepoliaViem.deployContract("CloneHelper", []);
+  const portalImpl = await params.sepoliaViem.deployContract("PrivacyPortal", []);
+  await cloneHelper.write.clone([portalImpl.address], { account: owner });
+  const portalAddress = (await cloneHelper.read.lastClone()) as `0x${string}`;
+  const portal = await params.sepoliaViem.getContractAt("PrivacyPortal", portalAddress, {
+    client: { public: base.sepolia.publicClient, wallet: hardhatCotiWallet },
+  });
   const pod = await params.sepoliaViem.deployContract("PodErc20Mintable", [
     portal.address,
     base.chainIds.coti,
@@ -78,6 +84,15 @@ export async function setupPrivacyPortalSystemContext(params: {
   await portal.write.initialize([underlying.address, pod.address, 18, false, mockFactory.address], {
     account: owner,
   });
+
+  // Withdraw transferFromAndCall offBoards ciphertexts to the portal address; sim requires an AES key.
+  if (["sim", "simcoti"].includes((process.env.COTI_BACKEND ?? "").trim().toLowerCase())) {
+    const { registerUserOnSim, deriveUserAesKey } = await import("../sim-coti/sim-coti-utils.js");
+    const portalKey = deriveUserAesKey(cotiPk);
+    const [signer] = await params.cotiViem.getWalletClients();
+    await registerUserOnSim(params.cotiViem, portal.address as `0x${string}`, portalKey, signer.account);
+    ppLog(`simCoti: registered portal AES key for ${portal.address}`);
+  }
 
   ppLog("fund portal and pToken with native inbox fees");
   await fundContractForInboxFees(hardhatCotiWallet, base.sepolia.publicClient, pod.address as `0x${string}`);
@@ -198,6 +213,7 @@ export async function depositAndComplete(
   const hash = await ctx.portal.write.deposit([recipient, amount, 0n, fees.callbackFeeWei], {
     account: ctx.owner,
     value: fees.totalValueWei,
+    gas: 5_000_000n,
   });
   await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
   await runCrossChainTwoWayRoundTrip(ctx.base, params.label, {
@@ -240,7 +256,7 @@ export async function withdrawAndComplete(
       permit.r,
       permit.s,
     ],
-    { account: ctx.owner, value: transferFee }
+    { account: ctx.owner, value: transferFee, gas: 5_000_000n }
   );
   await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
 
@@ -254,6 +270,7 @@ export async function withdrawAndComplete(
   const burnHash = await ctx.portal.write.burnAccumulatedPTokens([amount, fees.callbackFeeWei], {
     account: ctx.owner,
     value: fees.totalValueWei,
+    gas: 5_000_000n,
   });
   const burnReceipt = await ctx.base.sepolia.publicClient.waitForTransactionReceipt({
     hash: burnHash,
