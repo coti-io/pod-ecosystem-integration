@@ -241,35 +241,58 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     pt("case pending guard: done (cleared, balance reduced by 100)");
   });
 
-  it("failed transfer clears pending and stores a meaningful error", async function () {
-    pt("case failed transfer: start");
+  it("encrypted insufficient transfer succeeds as no-op without distinct failure", async function () {
+    pt("case encrypted insufficient: start (PP-04 mux path)");
     const start = 500n;
     const ownerBefore = await readDecryptedBalance(ctx, ctx.owner);
     const bobBefore = await readDecryptedBalance(ctx, ctx.bob.address);
-    pt(`case failed transfer: fund owner ${start}, then attempt transfer > balance`);
-    await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "failFund");
+    pt(`case encrypted insufficient: fund owner ${start}, then attempt transfer > balance`);
+    await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "encInsufFund");
     const ownerAfterMint = await readDecryptedBalance(ctx, ctx.owner);
     assert.equal(ownerAfterMint, ownerBefore + start);
 
     const tooMuch = ownerAfterMint + 1n;
-    pt(`case failed transfer: attempt ${tooMuch} (> balance ${ownerAfterMint})`);
+    pt(`case encrypted insufficient: attempt ${tooMuch} (> balance ${ownerAfterMint})`);
     const itAmount = await encryptAmount(ctx, tooMuch);
-    pt("case failed transfer: round-trip (COTI should reject insufficient balance)");
-    const { cotiIncomingRequestId } = await completePodOpRoundTrip(ctx, "failXfer", () =>
+    pt("case encrypted insufficient: round-trip (expect Success no-op, no raise)");
+    const { cotiIncomingRequestId } = await completePodOpRoundTrip(ctx, "encInsufXfer", () =>
       ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount, ctx.base.podTwoWayFees.callbackFeeWei], podTwoWayWriteOptions(ctx.base.podTwoWayFees))
     );
 
     const st = await readBalanceWithPending(ctx, ctx.owner);
     assert.equal(st.pending, false);
-    const ownerAfterFail = await readDecryptedBalance(ctx, ctx.owner);
-    assert.equal(ownerAfterFail, ownerAfterMint);
+    const ownerAfter = await readDecryptedBalance(ctx, ctx.owner);
+    assert.equal(ownerAfter, ownerAfterMint);
     assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), bobBefore);
-    pt(`case failed transfer: pending cleared, failedRequests key=${cotiIncomingRequestId}`);
+    const status = await ctx.pod.read.requests([cotiIncomingRequestId]);
+    // RequestStatus.Success
+    assert.equal(Number(status.status), 2);
+    const errHex = (await ctx.pod.read.failedRequests([cotiIncomingRequestId])) as `0x${string}`;
+    assert.equal(errHex, "0x");
+    pt(`case encrypted insufficient: done (Success no-op, balances unchanged)`);
+  });
 
+  it("public insufficient transfer still raises insufficient balance", async function () {
+    pt("case public insufficient: start");
+    const start = 200n;
+    await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "pubInsufFund");
+    const ownerAfterMint = await readDecryptedBalance(ctx, ctx.owner);
+    const tooMuch = ownerAfterMint + 1n;
+    pt(`case public insufficient: attempt public transfer ${tooMuch}`);
+    const { cotiIncomingRequestId } = await completePodOpRoundTrip(ctx, "pubInsufXfer", () =>
+      ctx.podAsCoti.write.transfer(
+        [ctx.bob.address, tooMuch, ctx.base.podTwoWayFees.callbackFeeWei],
+        podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+      )
+    );
+
+    const st = await readBalanceWithPending(ctx, ctx.owner);
+    assert.equal(st.pending, false);
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerAfterMint);
     const errHex = (await ctx.pod.read.failedRequests([cotiIncomingRequestId])) as `0x${string}`;
     const text = utf8FromFailedRequestBytes(errHex);
     assertIncludesInsensitive(text, "insufficient");
-    pt(`case failed transfer: done (error text includes "insufficient")`);
+    pt(`case public insufficient: done (error text includes "insufficient")`);
   });
 
   it("bad encryption transfer: SystemFailed clears pending, balance unchanged, then good transfer succeeds", async function () {
