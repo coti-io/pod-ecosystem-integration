@@ -211,6 +211,13 @@ export type OracleUsdLegs = { localUsd18: bigint; remoteUsd18: bigint };
 /** @deprecated Use {@link oracleUsdPricesForChain} */
 export type OracleLegs = OracleUsdLegs;
 
+/** Live COTI testnet (7082400) or in-process simCoti (7082401). */
+const isCotiFamilyChainId = (chainId: number): boolean => {
+  const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
+  const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "7082401");
+  return chainId === cotiTestnetId || chainId === simCotiId;
+};
+
 /**
  * Local = this chain's native token; remote = the paired chain's native token.
  * Sepolia / local Hardhat: local ETH, remote COTI. COTI testnet: local COTI, remote ETH.
@@ -220,20 +227,21 @@ export const oracleUsdPricesForChain = (chainId: number): OracleUsdLegs => {
   const coti = usdPerWholeToken18(TESTNET_COTI_USD);
   const avax = usdPerWholeToken18(TESTNET_AVAX_USD);
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
-  if (chainId === 11155111 || chainId === 31337) {
+  const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "7082401");
+  if (chainId === 11155111 || chainId === 31337 || chainId >= 313_370_000) {
     return { localUsd18: eth, remoteUsd18: coti };
   }
   if (chainId === AVALANCHE_FUJI_CHAIN_ID) {
     return { localUsd18: avax, remoteUsd18: coti };
   }
-  if (chainId === cotiTestnetId) {
+  if (isCotiFamilyChainId(chainId)) {
     return { localUsd18: coti, remoteUsd18: eth };
   }
   throw new Error(
     `Unsupported chainId ${chainId} for testnet oracle legs. ` +
       `Use Sepolia (11155111), Avalanche Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
-      `COTI testnet (${cotiTestnetId}), or local (31337), ` +
-      `or set COTI_TESTNET_CHAIN_ID to match this network.`
+      `COTI testnet (${cotiTestnetId}), simCoti (${simCotiId}), or local (31337), ` +
+      `or set COTI_TESTNET_CHAIN_ID / SIM_COTI_CHAIN_ID to match this network.`
   );
 };
 
@@ -351,7 +359,7 @@ export const chainlinkFeedsForChain = (chainId: number): ChainlinkFeedConfig => 
       fetchIntervalSeconds: fetchInterval,
     };
   }
-  if (chainId === cotiTestnetId) {
+  if (chainId === cotiTestnetId || isCotiFamilyChainId(chainId)) {
     return {
       localFeed: zeroAddress,
       remoteFeed: zeroAddress,
@@ -524,18 +532,17 @@ export const feeConfigTupleToJson = (t: FeeConfigTuple): FeeConfigJson => ({
  * Sepolia: local ETH (variable), remote COTI (constant). COTI: local COTI (constant), remote ETH (variable).
  */
 export const testnetMinFeeConfigsForChain = (chainId: number): { local: FeeConfigTuple; remote: FeeConfigTuple } => {
-  const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
   if (chainId === 11155111 || chainId === 31337 || chainId === AVALANCHE_FUJI_CHAIN_ID) {
     return { local: { ...FEE_CONFIG_SEPOLIA_SIDE }, remote: { ...FEE_CONFIG_COTI_SIDE } };
   }
-  if (chainId === cotiTestnetId) {
+  if (isCotiFamilyChainId(chainId)) {
     return { local: { ...FEE_CONFIG_COTI_SIDE }, remote: { ...FEE_CONFIG_SEPOLIA_SIDE } };
   }
   throw new Error(
     `Unsupported chainId ${chainId} for testnet fee configs. ` +
       `Use Sepolia (11155111), Avalanche Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
-      `COTI testnet (${cotiTestnetId}), or local (31337), ` +
-      `or set COTI_TESTNET_CHAIN_ID to match this network.`
+      `COTI testnet / simCoti, or local (31337), ` +
+      `or set COTI_TESTNET_CHAIN_ID / SIM_COTI_CHAIN_ID to match this network.`
   );
 };
 
@@ -561,12 +568,11 @@ export const readFeeConfigForChain = async (
 
 /** True for Sepolia, Avalanche Fuji, local Hardhat, or COTI testnet (same IDs as {@link testnetMinFeeConfigsForChain}). */
 export const isTestnetSepoliaCotiPairChain = (chainId: number): boolean => {
-  const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
   return (
     chainId === 11155111 ||
     chainId === 31337 ||
     chainId === AVALANCHE_FUJI_CHAIN_ID ||
-    chainId === cotiTestnetId
+    isCotiFamilyChainId(chainId)
   );
 };
 
@@ -622,11 +628,10 @@ const manualUsdLegsForChain = (chainId: number, oracleConfig?: OracleConfigJson)
   const cotiSpot = oracleConfig?.cotiUsdSpot?.trim();
   if (!cotiSpot) return legs;
   const coti = usdPerWholeToken18(cotiSpot);
-  const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
   if (chainId === 11155111 || chainId === 31337 || chainId === AVALANCHE_FUJI_CHAIN_ID) {
     return { ...legs, remoteUsd18: coti };
   }
-  if (chainId === cotiTestnetId) {
+  if (isCotiFamilyChainId(chainId)) {
     return { ...legs, localUsd18: coti };
   }
   return legs;

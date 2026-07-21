@@ -159,6 +159,8 @@
       "podTokenImplementation": "0xcee95959573618ee8464526c591fe70ae56ab293",
       "privacyPortalFactory": "0xcf06fbf94af5e9eceb15aa1ba6458b72521424fd",
       "privacyPortalFactoryConstructor": {
+        "feeRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
+        "rescueRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
         "priceOracle": "0x0000000000000000000000000000000000000000",
         "portalFee": {
           "deposit": {
@@ -189,7 +191,12 @@
           "portal": "0x25E7a1BddF4b9696F19A726Cb2Ce550467527e90",
           "pToken": "0xe7956aDaC668b563Dc77eD29C5E7A4Ef5edFB3FB"
         }
-      }
+      },
+      "privatePayrollCoti": "0xeddbb52a6b92db6ba088c39a96dd0b1a76082ecb",
+      "payrollVault": "0xd43b8c9015565f3c3f453e574418e17302c73dd9",
+      "payrollClaimStore": "0x3b765d5d29093c08236566d954f52eaadfe5a4a2",
+      "payrollCampaignFactory": "0x17cad9fce18ef750e8626c2d1ee9be97f3d375e5",
+      "payrollCampaignFacade": "0x401b9514a3CCA82c790d7F360F28C1B33F04227D"
     },
     "2632500": {
       "inbox": "",
@@ -239,7 +246,8 @@
           "errorLength": "300",
           "bufferRatioX10000": "5000"
         }
-      }
+      },
+      "privatePayrollCoti": "0xeddbb52a6b92db6ba088c39a96dd0b1a76082ecb"
     },
     "11155111": {
       "inbox": "0xAb625bE229F603f6BBF964474AFf6d5487e364De",
@@ -278,6 +286,23 @@
       "portalImplementation": "0x4cf43909aa16c85f78606cdda96a88494ca43194",
       "podTokenImplementation": "0x69cb293b7cca85db7bb68b32090c684b9282b366",
       "privacyPortalFactory": "0xe26a0db663a9d546ab4dfd02d8b4305e3df9ce73",
+      "privacyPortalFactoryConstructor": {
+        "feeRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
+        "rescueRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
+        "priceOracle": "0xe1afeda542d1b9003df0e133187f845dea8b1ba8",
+        "portalFee": {
+          "deposit": {
+            "fixedFee": "10000000000000",
+            "percentageBps": "500",
+            "maxFee": "100000000000000000"
+          },
+          "withdraw": {
+            "fixedFee": "10000000000000",
+            "percentageBps": "500",
+            "maxFee": "100000000000000000"
+          }
+        }
+      },
       "privacyPortalTokens": {
         "pMTT": {
           "underlying": "0xd3f5c63f4D87D2235b295FbA83351d31d0eD1BeE",

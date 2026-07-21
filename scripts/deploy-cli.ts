@@ -178,7 +178,12 @@ const ppFactoryVerifyArgs = (ctx: DeployCtx): string[] => {
   const chainCfg = chainCfgSync(ctx.chainId);
   const owner = factoryOwner(ctx);
   const stored = chainCfg.privacyPortalFactoryConstructor as
-    | { priceOracle?: string; portalFee?: { deposit: Record<string, string>; withdraw: Record<string, string> } }
+    | {
+        feeRecipient?: string;
+        rescueRecipient?: string;
+        priceOracle?: string;
+        portalFee?: { deposit: Record<string, string>; withdraw: Record<string, string> };
+      }
     | undefined;
   const portalFee = stored?.portalFee
     ? {
@@ -187,6 +192,12 @@ const ppFactoryVerifyArgs = (ctx: DeployCtx): string[] => {
       }
     : readPortalFeeConfigSync(ctx.chainId);
   const portalOracle = stored?.priceOracle ?? resolvePortalOracle(chainCfg) ?? zeroAddress;
+  const feeRecipient =
+    stored?.feeRecipient && isAddr(stored.feeRecipient) ? (stored.feeRecipient as Address) : owner;
+  const rescueRecipient =
+    stored?.rescueRecipient && isAddr(stored.rescueRecipient)
+      ? (stored.rescueRecipient as Address)
+      : feeRecipient;
   return [
     owner,
     ctx.inboxAddress,
@@ -194,7 +205,8 @@ const ppFactoryVerifyArgs = (ctx: DeployCtx): string[] => {
     readCotiMother(pairedCotiChainId(ctx)) ?? "",
     chainCfg.podTokenImplementation,
     chainCfg.portalImplementation,
-    owner,
+    feeRecipient,
+    rescueRecipient,
     oracleTokensForChain(ctx.chainId).portalNative,
     portalOracle,
     portalFee.deposit.fixedFee.toString(),
@@ -1070,6 +1082,15 @@ const TARGETS: Target[] = [
       const owner = factoryOwner(ctx);
       const { portalNative } = oracleTokensForChain(ctx.chainId);
       const portalFee = readPortalFeeConfigSync(ctx.chainId);
+      const stored = chainCfg.privacyPortalFactoryConstructor as
+        | { feeRecipient?: string; rescueRecipient?: string }
+        | undefined;
+      const feeRecipient =
+        stored?.feeRecipient && isAddr(stored.feeRecipient) ? (stored.feeRecipient as Address) : owner;
+      const rescueRecipient =
+        stored?.rescueRecipient && isAddr(stored.rescueRecipient)
+          ? (stored.rescueRecipient as Address)
+          : feeRecipient;
       return deploySimple(ctx, "PrivacyPortalFactory", [
         owner,
         ctx.inboxAddress,
@@ -1077,7 +1098,8 @@ const TARGETS: Target[] = [
         cotiMother,
         podTokenImpl,
         portalImpl,
-        owner,
+        feeRecipient,
+        rescueRecipient,
         portalNative,
         oracleAddr,
         portalFee.deposit.fixedFee,

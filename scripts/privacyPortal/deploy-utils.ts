@@ -157,6 +157,7 @@ export const deploySourceFactory = async (
     cotiMother: `0x${string}`;
     owner?: `0x${string}`;
     feeRecipient?: `0x${string}`;
+    rescueRecipient?: `0x${string}`;
     priceOracle?: `0x${string}`;
     depositFixedFee?: bigint;
     depositPercentageBps?: bigint;
@@ -168,6 +169,7 @@ export const deploySourceFactory = async (
 ): Promise<SourceFactoryDeployment> => {
   const owner = params.owner ?? ctx.deployer;
   const feeRecipient = params.feeRecipient ?? owner;
+  const rescueRecipient = params.rescueRecipient ?? feeRecipient;
   const maxFee = (1n << 128n) - 1n;
   const deployConfig = await readDeployConfig();
   const chainConfig = getChainConfig(deployConfig, ctx.chainId, "source");
@@ -198,6 +200,7 @@ export const deploySourceFactory = async (
       podTokenImplementation.address,
       portalImplementation.address,
       feeRecipient,
+      rescueRecipient,
       portalNative,
       params.priceOracle ?? priceOracle ?? zeroAddress,
       params.depositFixedFee ?? 0n,
