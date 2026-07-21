@@ -110,6 +110,23 @@ export type FeeConfigJson = {
   bufferRatioX10000: string | number;
 };
 
+/**
+ * Inbox `{setGasPriceBounds}` params from `deployConfig.chains[id].gasPriceBounds` (wei strings).
+ * Used by fee→gas conversion (`basefee + minPriorityFee` on EIP-1559; clamped `tx.gasprice` otherwise).
+ */
+export type GasPriceBoundsJson = {
+  minPriorityFeeWei: string | number;
+  minGasPriceWei: string | number;
+  /** Zero disables the ceiling. */
+  maxGasPriceWei: string | number;
+};
+
+export type GasPriceBoundsTuple = {
+  minPriorityFeeWei: bigint;
+  minGasPriceWei: bigint;
+  maxGasPriceWei: bigint;
+};
+
 /** Portal protocol fee template (`fixedFee` / `maxFee` in native wei; `percentageBps` / 1_000_000). */
 export type PortalFeeConfigJson = {
   fixedFee: string | number;
@@ -183,11 +200,23 @@ type DeployConfig = {
       oracle?: OracleConfigJson;
       /** Min-fee templates for this chain's inbox (local = this chain, remote = paired chain). */
       feeConfig?: { local: FeeConfigJson; remote: FeeConfigJson };
+      /**
+       * Reference gas-price bounds for inbox fee→gas conversion ({setGasPriceBounds}).
+       * Required on non-EIP-1559 chains (e.g. COTI); recommended on all deploys.
+       */
+      gasPriceBounds?: GasPriceBoundsJson;
       /** Factory default portal protocol fees (deposit + withdraw). */
       portalFee?: { deposit: PortalFeeConfigJson; withdraw: PortalFeeConfigJson };
       [key: string]: unknown;
     }
   >;
+};
+
+/** Contract defaults: floor = 2 gwei, no tip, no ceiling (EIP-1559 uses basefee + tip). */
+export const DEFAULT_GAS_PRICE_BOUNDS: GasPriceBoundsTuple = {
+  minPriorityFeeWei: 0n,
+  minGasPriceWei: 2_000_000_000n,
+  maxGasPriceWei: 0n,
 };
 
 /** Fixed testnet spot prices (USD per whole 18‑decimal native token). Used as {PriceOracle} 18‑decimal fixed values. */
@@ -564,6 +593,72 @@ export const readFeeConfigForChain = async (
     // Missing/unreadable config — fall back to built-in defaults below.
   }
   return testnetMinFeeConfigsForChain(chainId);
+};
+
+export const gasPriceBoundsFromJson = (j: GasPriceBoundsJson): GasPriceBoundsTuple => ({
+  minPriorityFeeWei: BigInt(j.minPriorityFeeWei),
+  minGasPriceWei: BigInt(j.minGasPriceWei),
+  maxGasPriceWei: BigInt(j.maxGasPriceWei),
+});
+
+export const gasPriceBoundsToJson = (t: GasPriceBoundsTuple): GasPriceBoundsJson => ({
+  minPriorityFeeWei: t.minPriorityFeeWei.toString(),
+  minGasPriceWei: t.minGasPriceWei.toString(),
+  maxGasPriceWei: t.maxGasPriceWei.toString(),
+});
+
+export const gasPriceBoundsEq = (a: GasPriceBoundsTuple, b: GasPriceBoundsTuple): boolean =>
+  a.minPriorityFeeWei === b.minPriorityFeeWei &&
+  a.minGasPriceWei === b.minGasPriceWei &&
+  a.maxGasPriceWei === b.maxGasPriceWei;
+
+/**
+ * Gas-price bounds for `chainId` from `deployConfig.json` `chains[id].gasPriceBounds`,
+ * else {@link DEFAULT_GAS_PRICE_BOUNDS}. On COTI (no reliable basefee), set explicit bounds in config.
+ */
+export const readGasPriceBoundsForChain = async (chainId: number): Promise<GasPriceBoundsTuple> => {
+  try {
+    const cfg = await readDeployConfig();
+    const bounds = cfg.chains?.[String(chainId)]?.gasPriceBounds;
+    if (bounds?.minGasPriceWei != null) {
+      return gasPriceBoundsFromJson(bounds);
+    }
+  } catch {
+    // fall through
+  }
+  return { ...DEFAULT_GAS_PRICE_BOUNDS };
+};
+
+export const readGasPriceBoundsForChainSync = (chainId: number): GasPriceBoundsTuple => {
+  try {
+    const cfg = JSON.parse(fsSync.readFileSync(deployConfigPath, "utf8")) as DeployConfig;
+    const bounds = cfg.chains?.[String(chainId)]?.gasPriceBounds;
+    if (bounds?.minGasPriceWei != null) {
+      return gasPriceBoundsFromJson(bounds);
+    }
+  } catch {
+    // fall through
+  }
+  return { ...DEFAULT_GAS_PRICE_BOUNDS };
+};
+
+export const formatGasPriceBounds = (t: GasPriceBoundsTuple): string =>
+  `priority=${t.minPriorityFeeWei} min=${t.minGasPriceWei} max=${t.maxGasPriceWei === 0n ? "none" : t.maxGasPriceWei}`;
+
+/** Read on-chain gas-price bounds from an inbox that exposes the POD-07 getters. */
+export const readInboxGasPriceBounds = async (inbox: {
+  read: {
+    minPriorityFeeWei: () => Promise<bigint>;
+    minGasPriceWei: () => Promise<bigint>;
+    maxGasPriceWei: () => Promise<bigint>;
+  };
+}): Promise<GasPriceBoundsTuple> => {
+  const [minPriorityFeeWei, minGasPriceWei, maxGasPriceWei] = await Promise.all([
+    inbox.read.minPriorityFeeWei(),
+    inbox.read.minGasPriceWei(),
+    inbox.read.maxGasPriceWei(),
+  ]);
+  return { minPriorityFeeWei, minGasPriceWei, maxGasPriceWei };
 };
 
 /** True for Sepolia, Avalanche Fuji, local Hardhat, or COTI testnet (same IDs as {@link testnetMinFeeConfigsForChain}). */
@@ -1077,6 +1172,39 @@ export const configureTestnetInboxMinFees = async (params: {
 };
 
 /**
+ * Applies `{setGasPriceBounds}` from `deployConfig.json` (`chains[id].gasPriceBounds`).
+ * Run after inbox deploy; required on non-EIP-1559 chains (COTI) so fee→gas conversion is not tip-manipulable.
+ */
+export const configureInboxGasPriceBounds = async (params: {
+  inbox: {
+    write: {
+      setGasPriceBounds: (
+        args: [bigint, bigint, bigint],
+        options?: { account: `0x${string}` }
+      ) => Promise<`0x${string}`>;
+    };
+  };
+  publicClient: unknown;
+  walletClient: WalletClient;
+  chainId: number;
+}): Promise<GasPriceBoundsTuple> => {
+  const bounds = await readGasPriceBoundsForChain(params.chainId);
+  if (bounds.minGasPriceWei === 0n) {
+    throw new Error(
+      `gasPriceBounds.minGasPriceWei must be non-zero (chainId=${params.chainId}). ` +
+        `Set chains[${params.chainId}].gasPriceBounds in deployConfig.json.`
+    );
+  }
+  const deployer = await resolveDeployerAddress(params.walletClient);
+  const hash = await params.inbox.write.setGasPriceBounds(
+    [bounds.minPriorityFeeWei, bounds.minGasPriceWei, bounds.maxGasPriceWei],
+    { account: deployer }
+  );
+  await waitMined(params.publicClient, hash);
+  return bounds;
+};
+
+/**
  * Applies factory default portal fees from `deployConfig.json` (`chains[id].portalFee`).
  * Idempotent: only sends txs when on-chain config differs.
  */
@@ -1245,15 +1373,15 @@ export const getChainConfig = (config: DeployConfig, chainId: number, label: str
   return chainConfig;
 };
 
-const resolveRpcUrl = (chainId: number) => {
-  if (chainId === 7082400 && process.env.COTI_TESTNET_RPC_URL) {
-    return process.env.COTI_TESTNET_RPC_URL;
+export const resolveRpcUrl = (chainId: number) => {
+  if (chainId === 7082400) {
+    return process.env.COTI_TESTNET_RPC_URL?.trim() || "https://testnet.coti.io/rpc";
   }
-  if (chainId === 11155111 && process.env.SEPOLIA_RPC_URL) {
-    return process.env.SEPOLIA_RPC_URL;
+  if (chainId === 11155111) {
+    return process.env.SEPOLIA_RPC_URL?.trim() || "https://ethereum-sepolia-rpc.publicnode.com";
   }
   if (chainId === AVALANCHE_FUJI_CHAIN_ID) {
-    return process.env.AVALANCHE_FUJI_RPC_URL ?? "https://avalanche-fuji-c-chain-rpc.publicnode.com";
+    return process.env.AVALANCHE_FUJI_RPC_URL?.trim() || "https://avalanche-fuji-c-chain-rpc.publicnode.com";
   }
   if (process.env.RPC_URL) {
     return process.env.RPC_URL;

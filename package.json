@@ -33,7 +33,9 @@
     "test:erc7984": "hardhat test test/erc7984/erc7984-compat.ts test/erc7984/portal-wrapper.ts test/erc7984/dummy-sync-flow.ts",
     "test:erc7984-explorer": "ERC7984_EXPLORER_TESTS=1 hardhat test test/erc7984/blockscout-explorer.ts",
     "demo:erc7984-sepolia": "hardhat run scripts/erc7984/run-sepolia-demo.ts --network sepolia",
-    "demo:erc7984-dummy-sepolia": "hardhat run scripts/erc7984/run-dummy-explorer-demo.ts --network sepolia"
+    "demo:erc7984-dummy-sepolia": "hardhat run scripts/erc7984/run-dummy-explorer-demo.ts --network sepolia",
+    "verify:deployments": "npm run link:contracts && hardhat compile && node --import tsx scripts/verify-deployments.ts",
+    "verify:deployments:config": "npm run link:contracts && hardhat compile && node --import tsx scripts/verify-deployments.ts --config-only"
   },
   "devDependencies": {
     "@coti-io/coti-ethers": "^1.0.5",
