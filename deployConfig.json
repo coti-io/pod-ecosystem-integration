@@ -205,11 +205,11 @@
           "motherRegistrationRequestId": "0x000000000000a86900000000006c11a000000000000000000000000000000003"
         }
       },
-      "privatePayrollCoti": "",
-      "payrollVault": "",
-      "payrollClaimStore": "",
-      "payrollCampaignFactory": "",
-      "payrollCampaignFacade": "",
+      "privatePayrollCoti": "0xd523915b48d7985837f5b10ffc6c41dc66313f04",
+      "payrollVault": "0x5c8f11c891bf884a153a98535a65f37903df509c",
+      "payrollClaimStore": "0x5889141489b4f4377cb575888231ebdd7f492064",
+      "payrollCampaignFactory": "0x40eca0ffc86c83bcde80504926a1dd7f8d84a25b",
+      "payrollCampaignFacade": "0xd01e50071FDf432BA74552Ea0d0Cd22367461848",
       "gasPriceBounds": {
         "minPriorityFeeWei": "0",
         "minGasPriceWei": "2000000000",
@@ -270,7 +270,7 @@
           "bufferRatioX10000": "5000"
         }
       },
-      "privatePayrollCoti": "",
+      "privatePayrollCoti": "0xd523915b48d7985837f5b10ffc6c41dc66313f04",
       "gasPriceBounds": {
         "minPriorityFeeWei": "0",
         "minGasPriceWei": "2000000000",
