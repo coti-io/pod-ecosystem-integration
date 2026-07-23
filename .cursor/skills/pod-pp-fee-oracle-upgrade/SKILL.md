@@ -125,6 +125,8 @@ Current deployed addresses: **`deployConfig.json`** → `chains.<chainId>.priceO
 
 Direct single-token read: `getLivePrice(token)`.
 
+Manual USD pegs (e.g. USDC $1): `setTokenPriceUSD(token, priceUsd18)` (`onlyPriceAdmin`). Clear with **`clearTokenPriceUSD(token)`** so live/adapter pricing resumes (`setTokenPriceUSD(..., 0)` reverts).
+
 ## Read Next
 
 - `reference.md` — ABI diffs, revert reasons, factory/oracle wiring, address map.

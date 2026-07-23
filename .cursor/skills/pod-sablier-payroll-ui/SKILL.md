@@ -30,18 +30,18 @@ Poll **`poolCreditedTotal`** after fund (not local encrypted pool / not `ackPool
 
 ## Deployed addresses (Fuji + COTI testnet)
 
-Prefer app config / `pod-dapp-ports/sablier-payroll-pod/deployments/production-payroll-avalancheFuji.json`. Snapshot after pod.inbox.v2.2 redeploy (`updatedAt` 2026-07-21):
+Prefer app config / `pod-dapp-ports/sablier-payroll-pod/deployments/production-payroll-avalancheFuji.json`. Snapshot after UI-supplied fee redesign (`updatedAt` 2026-07-22):
 
 | Role | Address | Explorer |
 |------|---------|----------|
 | Inbox (Fuji + COTI) | `0x3b8B70819f27e0438cBcE7f31894f799da52648F` | — |
 | MpcExecutor | `0x6804961167c3c8ef2bf6839ddcf51ec1fbe800c3` | Cotiscan |
-| PrivatePayrollCoti | `0xd523915b48d7985837f5b10ffc6c41dc66313f04` | [Cotiscan](https://testnet.cotiscan.io/address/0xd523915b48d7985837f5b10ffc6c41dc66313f04#code) |
-| PayrollVault | `0x5c8f11c891bf884a153a98535a65f37903df509c` | [Snowscan](https://testnet.snowscan.xyz/address/0x5c8f11c891bf884a153a98535a65f37903df509c#code) |
-| PodClaimStore | `0x5889141489b4f4377cb575888231ebdd7f492064` | [Snowscan](https://testnet.snowscan.xyz/address/0x5889141489b4f4377cb575888231ebdd7f492064#code) |
-| PayrollCampaignFactory | `0x40eca0ffc86c83bcde80504926a1dd7f8d84a25b` | [Snowscan](https://testnet.snowscan.xyz/address/0x40eca0ffc86c83bcde80504926a1dd7f8d84a25b#code) |
-| Template facade | `0xd01e50071FDf432BA74552Ea0d0Cd22367461848` | [Snowscan](https://testnet.snowscan.xyz/address/0xd01e50071FDf432BA74552Ea0d0Cd22367461848#code) |
-| Comptroller | `0x920189a7688b1653573916438b3c3bf566c3c03f` | Snowscan |
+| PrivatePayrollCoti | `0x81aa3b52ffcbb62bc4391008ceeb0965c0de8640` | [Cotiscan](https://testnet.cotiscan.io/address/0x81aa3b52ffcbb62bc4391008ceeb0965c0de8640#code) |
+| PayrollVault | `0x41560d11e83369b24c9020a8ec59de98935be377` | [Snowscan](https://testnet.snowscan.xyz/address/0x41560d11e83369b24c9020a8ec59de98935be377#code) |
+| PodClaimStore | `0xd4418977eaa75de172157b456bfb63c1cff297a9` | [Snowscan](https://testnet.snowscan.xyz/address/0xd4418977eaa75de172157b456bfb63c1cff297a9#code) |
+| PayrollCampaignFactory | `0x056242ccb7c71165ba0c6e8d1a9b2330ec6aefd0` | [Snowscan](https://testnet.snowscan.xyz/address/0x056242ccb7c71165ba0c6e8d1a9b2330ec6aefd0#code) |
+| Template facade | `0x5EC2693A0f014D32917A9801999B07011b1A9030` | [Snowscan](https://testnet.snowscan.xyz/address/0x5EC2693A0f014D32917A9801999B07011b1A9030#code) |
+| Comptroller | `0xaaef4e27ab0213b826a0db994122f971aefafdff` | Snowscan |
 | pMTT | `0xFC6283a9000d7D5Cf8A058A04A9ED90265Af1634` | Snowscan |
 | PrivacyPortal (pMTT) | `0xf4100d21eB4B1a66aDde58A01D1E32356F268b3F` | Snowscan |
 
@@ -53,7 +53,7 @@ Chain ids: Fuji `43113`, COTI testnet `7082400`. **Live fees:** quote via `inbox
 2. **Never** call `ackPoolCredit` (removed). Never expect Fuji MPC / AccountOnboard for pool.
 3. **Claim** is async: `ClaimInstant` = submitted; **Paid** only when `hasClaimed` + balance sync after dual-chain mine.
 4. Quote **comptroller fee** (`calculateMinFeeWei`) **and** live inbox + pToken fees off-chain (InboxFeeManager + `pToken.estimateFee` at current `gasPrice`); pass all wei into `claim` / fund / clawback — never use on-chain vault `estimateFee` or baked fee storage.
-5. Top up facade with native AVAX for claim inbox fees (claim pays inbox from facade float using a live quote).
+5. Top up facade with native AVAX for claim inbox fees (employee passes UI-quoted inbox + pToken fee wei; float pays inbox).
 6. Create campaigns via **`PayrollCampaignFactory.createCampaign`**; register COTI leaves after create.
 
 ## Read next

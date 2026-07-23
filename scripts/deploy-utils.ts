@@ -191,6 +191,11 @@ export const oracleAdapterType = (oracleConfig?: OracleConfigJson): OracleAdapte
 };
 
 type DeployConfig = {
+  /**
+   * Global role intent for every chain/contract.
+   * Same owner / miners / operators apply network-wide for consistency.
+   */
+  roles?: GlobalRolesJson;
   chains: Record<
     string,
     {
@@ -207,10 +212,232 @@ type DeployConfig = {
       gasPriceBounds?: GasPriceBoundsJson;
       /** Factory default portal protocol fees (deposit + withdraw). */
       portalFee?: { deposit: PortalFeeConfigJson; withdraw: PortalFeeConfigJson };
+      /** @deprecated Use top-level `deployConfig.roles`. Ignored when top-level roles exist. */
+      roles?: GlobalRolesJson | ChainRolesJson;
       [key: string]: unknown;
     }
   >;
 };
+
+/**
+ * Central roles in `deployConfig.roles` — one source of truth for all chains.
+ * Optional fields default to `owner` (or `[owner]` for lists).
+ */
+export type GlobalRolesJson = {
+  /** Ownable / factory admin for Inbox, oracles, mother, adder, executor, factory. */
+  owner?: string;
+  miners?: string[];
+  priceAdmin?: string;
+  operators?: string[];
+  deployers?: string[];
+  feeRecipient?: string;
+  rescueRecipient?: string;
+};
+
+/** @deprecated Legacy per-contract shape; prefer {@link GlobalRolesJson}. */
+export type ChainRolesJson = GlobalRolesJson & {
+  inbox?: { owner?: string; miners?: string[] };
+  priceOracle?: { owner?: string; priceAdmin?: string };
+  oracleLiveAdapter?: { owner?: string };
+  mpcAdder?: { owner?: string };
+  cotiExecutor?: { owner?: string };
+  cotiMother?: { owner?: string };
+  privacyPortalFactory?: {
+    admin?: string;
+    operators?: string[];
+    deployers?: string[];
+    feeRecipient?: string;
+    rescueRecipient?: string;
+  };
+};
+
+/** Expanded role snapshot applied uniformly to every deployed contract. */
+export type ResolvedChainRoles = {
+  inbox: { owner: `0x${string}`; miners: `0x${string}`[] };
+  priceOracle: { owner: `0x${string}`; priceAdmin: `0x${string}` };
+  oracleLiveAdapter: { owner: `0x${string}` };
+  mpcAdder: { owner: `0x${string}` };
+  cotiExecutor: { owner: `0x${string}` };
+  cotiMother: { owner: `0x${string}` };
+  privacyPortalFactory: {
+    admin: `0x${string}`;
+    operators: `0x${string}`[];
+    deployers: `0x${string}`[];
+    feeRecipient: `0x${string}`;
+    rescueRecipient: `0x${string}`;
+  };
+};
+
+const addrOr = (raw: unknown, fallback: `0x${string}`, label: string): `0x${string}` => {
+  if (typeof raw === "string" && /^0x[a-fA-F0-9]{40}$/.test(raw)) {
+    return raw as `0x${string}`;
+  }
+  if (raw != null && String(raw).trim() !== "") {
+    console.warn(`  roles: invalid ${label} ${JSON.stringify(raw)}; using ${fallback}`);
+  }
+  return fallback;
+};
+
+const addrListOr = (raw: unknown, fallback: `0x${string}`[], label: string): `0x${string}`[] => {
+  if (!Array.isArray(raw) || raw.length === 0) return fallback;
+  const out: `0x${string}`[] = [];
+  for (const item of raw) {
+    if (typeof item === "string" && /^0x[a-fA-F0-9]{40}$/.test(item)) {
+      out.push(item as `0x${string}`);
+    } else {
+      console.warn(`  roles: skipping invalid ${label} entry ${JSON.stringify(item)}`);
+    }
+  }
+  return out.length > 0 ? out : fallback;
+};
+
+const isLegacyChainRoles = (roles: Record<string, unknown>): boolean =>
+  "inbox" in roles ||
+  "priceOracle" in roles ||
+  "privacyPortalFactory" in roles ||
+  "cotiMother" in roles ||
+  "mpcAdder" in roles;
+
+/** Normalize top-level or legacy nested roles into {@link GlobalRolesJson}. */
+const toGlobalRoles = (raw: unknown): GlobalRolesJson => {
+  if (!raw || typeof raw !== "object") return {};
+  const r = raw as Record<string, unknown>;
+  if (!isLegacyChainRoles(r)) {
+    return r as GlobalRolesJson;
+  }
+  const legacy = r as ChainRolesJson;
+  const factory = legacy.privacyPortalFactory ?? {};
+  return {
+    owner:
+      legacy.owner ??
+      legacy.inbox?.owner ??
+      legacy.priceOracle?.owner ??
+      legacy.cotiMother?.owner ??
+      factory.admin,
+    miners: legacy.miners ?? legacy.inbox?.miners,
+    priceAdmin: legacy.priceAdmin ?? legacy.priceOracle?.priceAdmin,
+    operators: legacy.operators ?? factory.operators,
+    deployers: legacy.deployers ?? factory.deployers,
+    feeRecipient: legacy.feeRecipient ?? factory.feeRecipient,
+    rescueRecipient: legacy.rescueRecipient ?? factory.rescueRecipient,
+  };
+};
+
+/**
+ * Resolve intended roles from central `deployConfig.roles` (same for every chain).
+ * Env (`FACTORY_OWNER`, `MINER_ADDRESS`) and `deployer` are fallbacks only.
+ */
+export const resolveRoles = (params: {
+  roles?: GlobalRolesJson | ChainRolesJson | null;
+  deployer: `0x${string}`;
+  /** Optional: one-release fallback for fee/rescue from factory constructor blob. */
+  chainCfg?: Record<string, unknown>;
+}): ResolvedChainRoles => {
+  const { deployer, chainCfg } = params;
+  const roles = toGlobalRoles(params.roles);
+  const factoryCtor = (chainCfg?.privacyPortalFactoryConstructor ?? {}) as {
+    feeRecipient?: string;
+    rescueRecipient?: string;
+  };
+
+  const factoryOwnerEnv = optionalEnv("FACTORY_OWNER");
+  const ownerFallback =
+    factoryOwnerEnv && /^0x[a-fA-F0-9]{40}$/.test(factoryOwnerEnv)
+      ? (factoryOwnerEnv as `0x${string}`)
+      : deployer;
+  if (!roles.owner && factoryOwnerEnv) {
+    console.warn("  roles: using FACTORY_OWNER env (prefer deployConfig.roles.owner)");
+  }
+
+  const minerEnv = optionalEnv("MINER_ADDRESS");
+  const minerFallback =
+    minerEnv && /^0x[a-fA-F0-9]{40}$/.test(minerEnv)
+      ? [minerEnv as `0x${string}`]
+      : [ownerFallback];
+  if (!roles.miners?.length && minerEnv) {
+    console.warn("  roles: using MINER_ADDRESS env (prefer deployConfig.roles.miners)");
+  }
+  if (!roles.miners?.length && !minerEnv && !roles.owner) {
+    console.warn(`  roles: miners unset; defaulting to ${ownerFallback}`);
+  }
+
+  const owner = addrOr(roles.owner, ownerFallback, "owner");
+  const priceAdmin = addrOr(roles.priceAdmin, owner, "priceAdmin");
+  const feeRecipient = addrOr(
+    roles.feeRecipient ?? factoryCtor.feeRecipient,
+    owner,
+    "feeRecipient"
+  );
+  const rescueRecipient = addrOr(
+    roles.rescueRecipient ?? factoryCtor.rescueRecipient,
+    feeRecipient,
+    "rescueRecipient"
+  );
+  const miners = addrListOr(roles.miners, minerFallback, "miners");
+  const operators = addrListOr(roles.operators, [owner], "operators");
+  const deployers = addrListOr(roles.deployers, [owner], "deployers");
+
+  // Same roles on every contract / chain — consistency is the product goal.
+  return {
+    inbox: { owner, miners },
+    priceOracle: { owner, priceAdmin },
+    oracleLiveAdapter: { owner },
+    mpcAdder: { owner },
+    cotiExecutor: { owner },
+    cotiMother: { owner },
+    privacyPortalFactory: {
+      admin: owner,
+      operators,
+      deployers,
+      feeRecipient,
+      rescueRecipient,
+    },
+  };
+};
+
+/** @deprecated Use {@link resolveRoles}; kept for call-site compatibility. */
+export const resolveChainRoles = (params: {
+  chainCfg: Record<string, unknown>;
+  deployer: `0x${string}`;
+  globalRoles?: GlobalRolesJson | ChainRolesJson | null;
+}): ResolvedChainRoles => {
+  const { chainCfg, deployer, globalRoles } = params;
+  if (chainCfg.roles != null && globalRoles == null) {
+    console.warn(
+      "  roles: chains.<id>.roles is deprecated — move to top-level deployConfig.roles"
+    );
+  }
+  return resolveRoles({
+    roles: globalRoles ?? (chainCfg.roles as GlobalRolesJson | undefined) ?? null,
+    deployer,
+    chainCfg,
+  });
+};
+
+/** Sync read of central roles from deployConfig.json (same for all chains). */
+export const readRoles = (deployer: `0x${string}`, chainId?: number): ResolvedChainRoles => {
+  const cfg = JSON.parse(fsSync.readFileSync(deployConfigPath, "utf8")) as DeployConfig;
+  if (cfg.roles == null) {
+    console.warn("  roles: deployConfig.roles missing; falling back to env/deployer");
+  }
+  const chainCfg =
+    chainId != null ? ((cfg.chains?.[String(chainId)] ?? {}) as Record<string, unknown>) : {};
+  if (chainCfg.roles != null && cfg.roles != null) {
+    console.warn(
+      `  roles: ignoring deprecated chains.${chainId}.roles (using top-level deployConfig.roles)`
+    );
+  }
+  return resolveRoles({
+    roles: cfg.roles ?? (chainCfg.roles as GlobalRolesJson | undefined) ?? null,
+    deployer,
+    chainCfg,
+  });
+};
+
+/** @deprecated Use {@link readRoles}. */
+export const readChainRoles = (chainId: number, deployer: `0x${string}`): ResolvedChainRoles =>
+  readRoles(deployer, chainId);
+
 
 /** Contract defaults: floor = 2 gwei, no tip, no ceiling (EIP-1559 uses basefee + tip). */
 export const DEFAULT_GAS_PRICE_BOUNDS: GasPriceBoundsTuple = {
@@ -370,7 +597,17 @@ export const chainlinkFeedsForChain = (chainId: number): ChainlinkFeedConfig => 
   const mainnetStaleness = 3_600n;
   const fetchInterval = 300n;
 
-  if (chainId === 11155111 || chainId === 31337) {
+  if (chainId === 31337) {
+    // Local Hardhat has no Sepolia Chainlink bytecode — both legs must be manual.
+    return {
+      localFeed: zeroAddress,
+      remoteFeed: zeroAddress,
+      manualLeg: "both",
+      maxStalenessSeconds: testnetStaleness,
+      fetchIntervalSeconds: fetchInterval,
+    };
+  }
+  if (chainId === 11155111) {
     return {
       localFeed: CHAINLINK_FEEDS.sepoliaEthUsd,
       remoteFeed: zeroAddress,
@@ -708,6 +945,12 @@ type DeployOracleParams = {
   walletClient: WalletClient;
   chainId: number;
   oracleConfig?: OracleConfigJson;
+  /** Ownable owner for PoDPriceOracle / plain PriceOracle (defaults to deployer). */
+  owner?: `0x${string}`;
+  /** Ownable owner for Band/Chainlink live adapter (defaults to `owner`). */
+  liveAdapterOwner?: `0x${string}`;
+  /** PoDPriceOracle priceAdmin after deploy (defaults to owner). */
+  priceAdmin?: `0x${string}`;
 };
 
 export const oracleConfigFromChain = (chainCfg: Record<string, unknown>): OracleConfigJson =>
@@ -739,10 +982,11 @@ const manualUsdLegsForChain = (chainId: number, oracleConfig?: OracleConfigJson)
 export const deployTestnetPriceOracle = async (params: DeployOracleParams) => {
   const { viem, publicClient, walletClient, chainId } = params;
   const deployer = await resolveDeployerAddress(walletClient);
+  const owner = (params.owner ?? deployer) as `0x${string}`;
   const writeOpts = { account: deployer, gas: COTI_ADMIN_WRITE_GAS };
   const { localUsd18, remoteUsd18 } = oracleUsdPricesForChain(chainId);
 
-  const oracle = await viem.deployContract("PriceOracle", [deployer], {
+  const oracle = await viem.deployContract("PriceOracle", [owner], {
     client: { public: publicClient, wallet: walletClient },
     account: deployer,
   });
@@ -797,6 +1041,7 @@ export type PodOracleContract = {
       options?: { account: `0x${string}`; gas?: bigint }
     ) => Promise<`0x${string}`>;
     setConfiguredOracle: (args: [`0x${string}`], options?: { account: `0x${string}`; gas?: bigint }) => Promise<`0x${string}`>;
+    setPriceAdmin: (args: [`0x${string}`], options?: { account: `0x${string}`; gas?: bigint }) => Promise<`0x${string}`>;
   };
 };
 
@@ -862,6 +1107,7 @@ export const deployLiveOracleAdapter = async (
 
   const { viem, publicClient, walletClient, chainId, oracleConfig } = params;
   const deployer = await resolveDeployerAddress(walletClient);
+  const owner = (params.liveAdapterOwner ?? params.owner ?? deployer) as `0x${string}`;
   const feeds = chainlinkFeedsForChain(chainId);
   const maxStaleness = maxStalenessFromConfig(oracleConfig, feeds);
 
@@ -869,7 +1115,7 @@ export const deployLiveOracleAdapter = async (
     const bandRef = bandStdRefForChain(chainId, oracleConfig);
     const contract = await viem.deployContract(
       "BandLiveOracle",
-      [deployer, bandRef, maxStaleness],
+      [owner, bandRef, maxStaleness],
       { client: { public: publicClient, wallet: walletClient }, account: deployer }
     );
     return { address: contract.address as `0x${string}`, contractName: "BandLiveOracle" };
@@ -877,7 +1123,7 @@ export const deployLiveOracleAdapter = async (
 
   const contract = await viem.deployContract(
     "ChainlinkLiveOracle",
-    [deployer, maxStaleness],
+    [owner, maxStaleness],
     { client: { public: publicClient, wallet: walletClient }, account: deployer }
   );
   return { address: contract.address as `0x${string}`, contractName: "ChainlinkLiveOracle" };
@@ -889,14 +1135,29 @@ export const deployPodPriceOracle = async (
 ): Promise<PodOracleContract> => {
   const { viem, publicClient, walletClient, chainId, oracleConfig, liveAdapter } = params;
   const deployer = await resolveDeployerAddress(walletClient);
+  const owner = (params.owner ?? deployer) as `0x${string}`;
   const feeds = chainlinkFeedsForChain(chainId);
   const fetchInterval = fetchIntervalFromConfig(oracleConfig, feeds);
 
-  return (await viem.deployContract(
+  const oracle = (await viem.deployContract(
     "PoDPriceOracle",
-    [deployer, liveAdapter, fetchInterval],
+    [owner, liveAdapter, fetchInterval],
     { client: { public: publicClient, wallet: walletClient }, account: deployer }
   )) as PodOracleContract;
+
+  const priceAdmin = (params.priceAdmin ?? owner) as `0x${string}`;
+  if (priceAdmin.toLowerCase() !== owner.toLowerCase()) {
+    // Deployer must still be Ownable owner to call setPriceAdmin — only works when owner===deployer.
+    if (owner.toLowerCase() === deployer.toLowerCase()) {
+      const h = await oracle.write.setPriceAdmin([priceAdmin], { account: deployer });
+      await waitMined(publicClient, h);
+    } else {
+      console.warn(
+        `  priceAdmin ${priceAdmin} != owner ${owner}; setPriceAdmin skipped (run ConfigureRoles as owner)`
+      );
+    }
+  }
+  return oracle;
 };
 
 const setAdapterFeed = async (params: {
