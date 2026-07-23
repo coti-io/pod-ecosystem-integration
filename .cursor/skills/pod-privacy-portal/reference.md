@@ -110,7 +110,7 @@ Withdraw (one pToken transfer + portal fee; **no inline burn**):
 - `requestWithdrawWithPermit(recipient, amount, portalFee, transferFee, transferCallbackFee, permit...)` with `value = transferTotalFee + portalFee`.
 - After release, pTokens stay in portal custody until the portal owner runs `burnAccumulatedPTokens(amount, burnCallbackFee)` with `value = burnTotalFee` (separate keeper tx).
 
-Native-wrapped portals release **wrapped ERC20** (WETH/WAVAX) on withdraw; they do not unwrap to native coin in the portal.
+Native-wrapped portals **unwrap** on withdraw: the portal calls `underlying.withdraw(amount)` and sends **native ETH/AVAX** to the recipient (not WETH/WAVAX ERC20).
 
 ## PrivacyPortal
 

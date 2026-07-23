@@ -53,6 +53,12 @@ import {
   ensureGasFunds,
 } from "./deploy-utils.js";
 import {
+  collectRoleMismatches,
+  configureChainRoles,
+  formatRoleMismatches,
+  resolveRoles,
+} from "./roles-check.js";
+import {
   connectPrivacyPortalNetwork,
   ensureMotherRegistration,
   registrationRequestIdFromReceipt,
@@ -187,16 +193,26 @@ const recordInboxSalt = async (params: {
   await writeCfg(cfg);
 };
 
-/** Factory owner for PrivacyPortal deployments: `FACTORY_OWNER` env if set, else the deployer. */
+/** Factory / mother admin from central `deployConfig.roles` (env FACTORY_OWNER is a fallback). */
 const factoryOwner = (ctx: DeployCtx): Address => {
-  const raw = optionalEnv("FACTORY_OWNER");
-  return raw ? asAddress(raw, "FACTORY_OWNER") : ctx.deployer;
+  return chainRoles(ctx).privacyPortalFactory.admin;
+};
+
+/** Global roles (same for every chain) expanded to per-contract fields. */
+const chainRoles = (ctx: DeployCtx) => {
+  const cfg = readCfgSync();
+  return resolveRoles({
+    roles: cfg.roles,
+    deployer: ctx.deployer,
+    chainCfg: cfg.chains?.[String(ctx.chainId)] ?? {},
+  });
 };
 
 /** Constructor args for `PrivacyPortalFactory` verification (deploy-time snapshot when recorded). */
 const ppFactoryVerifyArgs = (ctx: DeployCtx): string[] => {
   const chainCfg = chainCfgSync(ctx.chainId);
-  const owner = factoryOwner(ctx);
+  const roles = chainRoles(ctx);
+  const owner = roles.privacyPortalFactory.admin;
   const stored = chainCfg.privacyPortalFactoryConstructor as
     | {
         feeRecipient?: string;
@@ -212,12 +228,8 @@ const ppFactoryVerifyArgs = (ctx: DeployCtx): string[] => {
       }
     : readPortalFeeConfigSync(ctx.chainId);
   const portalOracle = stored?.priceOracle ?? resolvePortalOracle(chainCfg) ?? zeroAddress;
-  const feeRecipient =
-    stored?.feeRecipient && isAddr(stored.feeRecipient) ? (stored.feeRecipient as Address) : owner;
-  const rescueRecipient =
-    stored?.rescueRecipient && isAddr(stored.rescueRecipient)
-      ? (stored.rescueRecipient as Address)
-      : feeRecipient;
+  const feeRecipient = roles.privacyPortalFactory.feeRecipient;
+  const rescueRecipient = roles.privacyPortalFactory.rescueRecipient;
   return [
     owner,
     ctx.inboxAddress,
@@ -248,6 +260,45 @@ const deploySimple = async (ctx: DeployCtx, name: string, args: unknown[]): Prom
     client: { public: ctx.publicClient, wallet: ctx.walletClient },
   });
   return c.address as Address;
+};
+
+/** If `desiredOwner` differs from deployer, transfer Ownable ownership (deployer must still be owner). */
+const maybeTransferOwnable = async (
+  ctx: DeployCtx,
+  address: Address,
+  desiredOwner: Address,
+  label: string
+): Promise<void> => {
+  if (desiredOwner.toLowerCase() === ctx.deployer.toLowerCase()) return;
+  const ownableAbi = [
+    { type: "function", name: "owner", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+    {
+      type: "function",
+      name: "transferOwnership",
+      stateMutability: "nonpayable",
+      inputs: [{ name: "newOwner", type: "address" }],
+      outputs: [],
+    },
+  ] as const;
+  const owner = (await ctx.publicClient.readContract({
+    address,
+    abi: ownableAbi,
+    functionName: "owner",
+  })) as Address;
+  if (owner.toLowerCase() === desiredOwner.toLowerCase()) return;
+  if (owner.toLowerCase() !== ctx.deployer.toLowerCase()) {
+    console.warn(`  ${label}: cannot transferOwnership (current owner ${owner})`);
+    return;
+  }
+  const hash = await ctx.walletClient.writeContract({
+    address,
+    abi: ownableAbi,
+    functionName: "transferOwnership",
+    args: [desiredOwner],
+    account: ctx.deployer,
+  });
+  await waitMined(ctx.publicClient, hash);
+  console.log(`  ${label}: transferred ownership to ${desiredOwner}`);
 };
 
 // --- source-side Pod app COTI routing (MpcAdder -> COTI MpcExecutor) ---
@@ -677,23 +728,26 @@ const TARGETS: Target[] = [
     configKey: "inbox",
     resolveAddress: (ctx) => ctx.inboxAddress,
     deploy: async (ctx) => {
+      const roles = chainRoles(ctx);
       const { inbox, alreadyDeployed } = await deployDeterministicInbox({
         viem: ctx.viem,
         publicClient: ctx.publicClient,
         walletClient: ctx.walletClient,
         saltLabel: ctx.inboxSaltLabel,
       });
-      const minerRaw = optionalEnv("MINER_ADDRESS");
-      if (minerRaw) {
+      for (const miner of roles.inbox.miners) {
         const added = await ensureMinerRegistered({
           inbox,
-          miner: asAddress(minerRaw, "MINER_ADDRESS"),
+          miner,
           publicClient: ctx.publicClient,
           walletClient: ctx.walletClient,
         });
-        console.log(added ? "  miner registered" : "  miner already registered");
-      } else {
-        console.log("  MINER_ADDRESS not set; skipped addMiner");
+        console.log(added ? `  miner registered ${miner}` : `  miner already registered ${miner}`);
+      }
+      if (roles.inbox.owner.toLowerCase() !== ctx.deployer.toLowerCase()) {
+        console.warn(
+          `  roles.inbox.owner=${roles.inbox.owner} (init owner is deployer ${ctx.deployer}); run ConfigureRoles to transferOwnership`
+        );
       }
       if (alreadyDeployed) console.log("  (inbox already existed at deterministic address)");
       console.log(
@@ -718,6 +772,7 @@ const TARGETS: Target[] = [
     resolveAddress: (_ctx, chainCfg) => chainCfg.priceOracle || undefined,
     deploy: async (ctx) => {
       const chainCfg = chainCfgSync(ctx.chainId);
+      const roles = chainRoles(ctx);
       const oracleConfig = oracleConfigFromChain(chainCfg);
       const adapter = oracleAdapterType(oracleConfig);
       if (adapter === "plain") {
@@ -735,6 +790,9 @@ const TARGETS: Target[] = [
         walletClient: ctx.walletClient,
         chainId: ctx.chainId,
         oracleConfig,
+        owner: roles.priceOracle.owner,
+        liveAdapterOwner: roles.oracleLiveAdapter.owner,
+        priceAdmin: roles.priceOracle.priceAdmin,
       });
       const cfg = await readCfg();
       const entry = chainEntry(cfg, ctx.chainId);
@@ -757,9 +815,10 @@ const TARGETS: Target[] = [
     },
     verifyArgs: (ctx) => {
       const chainCfg = chainCfgSync(ctx.chainId);
+      const roles = chainRoles(ctx);
       const oracleConfig = oracleConfigFromChain(chainCfg);
       if (usePlainOracleForConfig(oracleConfig)) {
-        return [ctx.deployer];
+        return [roles.priceOracle.owner];
       }
       const feeds = chainlinkFeedsForChain(ctx.chainId);
       const liveAdapter = (chainCfg.oracle?.liveAdapter?.trim() || zeroAddress) as Address;
@@ -767,7 +826,7 @@ const TARGETS: Target[] = [
         oracleConfig.fetchInterval != null && String(oracleConfig.fetchInterval).trim() !== ""
           ? String(oracleConfig.fetchInterval)
           : feeds.fetchIntervalSeconds.toString();
-      return [ctx.deployer, liveAdapter, fetchInterval];
+      return [roles.priceOracle.owner, liveAdapter, fetchInterval];
     },
   },
   {
@@ -898,6 +957,91 @@ const TARGETS: Target[] = [
     },
   },
   {
+    id: "verifyRoles",
+    label: "VerifyRoles",
+    kind: "action",
+    roles: ["source", "coti"],
+    dependsOn: [],
+    status: async (ctx) => {
+      const chainCfg = chainCfgSync(ctx.chainId);
+      const roles = chainRoles(ctx);
+      const mismatches = await collectRoleMismatches({
+        publicClient: ctx.publicClient,
+        chainCfg,
+        roles,
+      });
+      if (mismatches.length === 0) return { applied: true, detail: "ok" };
+      return { applied: false, detail: formatRoleMismatches(mismatches) };
+    },
+    run: async (ctx) => {
+      const chainCfg = chainCfgSync(ctx.chainId);
+      const roles = chainRoles(ctx);
+      const mismatches = await collectRoleMismatches({
+        publicClient: ctx.publicClient,
+        chainCfg,
+        roles,
+      });
+      if (mismatches.length === 0) {
+        console.log("  all roles match deployConfig.roles (global)");
+        return;
+      }
+      console.warn(`  WARN: ${mismatches.length} role mismatch(es) vs deployConfig.roles:`);
+      for (const m of mismatches) {
+        console.warn(`    ${m.contract}.${m.field}: expected ${m.expected}, actual ${m.actual}`);
+      }
+      console.warn("  run ConfigureRoles to align on-chain roles (or update deployConfig.roles)");
+    },
+  },
+  {
+    id: "configureRoles",
+    label: "ConfigureRoles",
+    kind: "action",
+    roles: ["source", "coti"],
+    dependsOn: [],
+    status: async (ctx) => {
+      const chainCfg = chainCfgSync(ctx.chainId);
+      const roles = chainRoles(ctx);
+      const mismatches = await collectRoleMismatches({
+        publicClient: ctx.publicClient,
+        chainCfg,
+        roles,
+      });
+      if (mismatches.length === 0) return { applied: true, detail: "ok" };
+      return { applied: false, detail: `${mismatches.length} to fix · ${formatRoleMismatches(mismatches)}` };
+    },
+    run: async (ctx) => {
+      const chainCfg = chainCfgSync(ctx.chainId);
+      const roles = chainRoles(ctx);
+      const { applied, skipped } = await configureChainRoles({
+        publicClient: ctx.publicClient,
+        walletClient: ctx.walletClient,
+        account: ctx.deployer,
+        chainCfg,
+        roles,
+      });
+      for (const line of applied) console.log(`  applied: ${line}`);
+      for (const line of skipped) console.log(`  skipped: ${line}`);
+      const mismatches = await collectRoleMismatches({
+        publicClient: ctx.publicClient,
+        chainCfg,
+        roles,
+      });
+      if (mismatches.length > 0) {
+        console.log(`  remaining mismatches (${mismatches.length}):`);
+        for (const m of mismatches) {
+          console.log(`    ${m.contract}.${m.field}: expected ${m.expected}, actual ${m.actual}`);
+        }
+        // feeRecipient is immutable — warn but don't hard-fail configure if that's the only issue.
+        const fixable = mismatches.filter((m) => m.field !== "feeRecipient");
+        if (fixable.length > 0) {
+          throw new Error(`ConfigureRoles incomplete: ${fixable.length} remaining fixable mismatch(es)`);
+        }
+      } else {
+        console.log("  all roles match deployConfig.roles (global)");
+      }
+    },
+  },
+  {
     id: "ppPortalFee",
     label: "PpPortalFee",
     kind: "action",
@@ -953,19 +1097,12 @@ const TARGETS: Target[] = [
     dependsOn: ["inbox"],
     configKey: "cotiExecutor",
     resolveAddress: (_ctx, chainCfg) => chainCfg.cotiExecutor || undefined,
-    deploy: (ctx) => deploySimple(ctx, "MpcExecutor", [ctx.inboxAddress]),
-    verifyArgs: (ctx) => [ctx.inboxAddress],
-  },
-  {
-    id: "pErc20Coti",
-    label: "PErc20Coti",
-    kind: "contract",
-    contractName: "PErc20Coti",
-    roles: ["coti"],
-    dependsOn: ["inbox"],
-    configKey: "pErc20Coti",
-    resolveAddress: (_ctx, chainCfg) => chainCfg.pErc20Coti || undefined,
-    deploy: (ctx) => deploySimple(ctx, "PErc20Coti", [ctx.inboxAddress]),
+    deploy: async (ctx) => {
+      const roles = chainRoles(ctx);
+      const address = await deploySimple(ctx, "MpcExecutor", [ctx.inboxAddress]);
+      await maybeTransferOwnable(ctx, address, roles.cotiExecutor.owner, "MpcExecutor");
+      return address;
+    },
     verifyArgs: (ctx) => [ctx.inboxAddress],
   },
   {
@@ -978,7 +1115,9 @@ const TARGETS: Target[] = [
     configKey: "mpcAdder",
     resolveAddress: (_ctx, chainCfg) => chainCfg.mpcAdder || undefined,
     deploy: async (ctx) => {
+      const roles = chainRoles(ctx);
       const address = await deploySimple(ctx, "MpcAdder", [ctx.inboxAddress]);
+      await maybeTransferOwnable(ctx, address, roles.mpcAdder.owner, "MpcAdder");
       await configureMpcAdder(ctx, address);
       return address;
     },
@@ -1007,30 +1146,6 @@ const TARGETS: Target[] = [
       if (!ok) throw new Error("COTI executor address missing; cannot configure MpcAdder.");
     },
   },
-  {
-    id: "pErc20",
-    label: "PErc20",
-    kind: "contract",
-    contractName: "PErc20",
-    roles: ["source"],
-    dependsOn: ["inbox"],
-    configKey: "pErc20",
-    resolveAddress: (_ctx, chainCfg) => chainCfg.pErc20 || undefined,
-    deploy: (ctx) => deploySimple(ctx, "PErc20", [ctx.inboxAddress]),
-    verifyArgs: (ctx) => [ctx.inboxAddress],
-  },
-  {
-    id: "millionaire",
-    label: "Millionaire",
-    kind: "contract",
-    contractName: "Millionaire",
-    roles: ["source"],
-    dependsOn: ["inbox"],
-    configKey: "millionaire",
-    resolveAddress: (_ctx, chainCfg) => chainCfg.millionaire || undefined,
-    deploy: (ctx) => deploySimple(ctx, "Millionaire", [ctx.inboxAddress]),
-    verifyArgs: (ctx) => [ctx.inboxAddress],
-  },
 
   // --- PrivacyPortal: COTI side (unified mother ledger) ---
   {
@@ -1042,8 +1157,14 @@ const TARGETS: Target[] = [
     dependsOn: ["inbox"],
     configKey: "cotiMother",
     resolveAddress: (_ctx, chainCfg) => chainCfg.cotiMother || undefined,
-    deploy: (ctx) => deploySimple(ctx, "PodErc20CotiMother", [ctx.inboxAddress, factoryOwner(ctx)]),
-    verifyArgs: (ctx) => [ctx.inboxAddress, factoryOwner(ctx)],
+    deploy: (ctx) => {
+      const roles = chainRoles(ctx);
+      return deploySimple(ctx, "PodErc20CotiMother", [ctx.inboxAddress, roles.cotiMother.owner]);
+    },
+    verifyArgs: (ctx) => {
+      const roles = chainRoles(ctx);
+      return [ctx.inboxAddress, roles.cotiMother.owner];
+    },
   },
   {
     id: "ppCotiMotherAllowlist",
@@ -1181,16 +1302,10 @@ const TARGETS: Target[] = [
       const owner = factoryOwner(ctx);
       const { portalNative } = oracleTokensForChain(ctx.chainId);
       const portalFee = readPortalFeeConfigSync(ctx.chainId);
-      const stored = chainCfg.privacyPortalFactoryConstructor as
-        | { feeRecipient?: string; rescueRecipient?: string }
-        | undefined;
-      const feeRecipient =
-        stored?.feeRecipient && isAddr(stored.feeRecipient) ? (stored.feeRecipient as Address) : owner;
-      const rescueRecipient =
-        stored?.rescueRecipient && isAddr(stored.rescueRecipient)
-          ? (stored.rescueRecipient as Address)
-          : feeRecipient;
-      return deploySimple(ctx, "PrivacyPortalFactory", [
+      const roles = chainRoles(ctx);
+      const feeRecipient = roles.privacyPortalFactory.feeRecipient;
+      const rescueRecipient = roles.privacyPortalFactory.rescueRecipient;
+      const address = await deploySimple(ctx, "PrivacyPortalFactory", [
         owner,
         ctx.inboxAddress,
         pairedCotiChainId(ctx),
@@ -1208,6 +1323,34 @@ const TARGETS: Target[] = [
         portalFee.withdraw.percentageBps,
         portalFee.withdraw.maxFee,
       ]);
+      // Grant extra operators / deployers beyond constructor defaults (admin is initialOwner).
+      if (owner.toLowerCase() !== ctx.deployer.toLowerCase()) {
+        console.warn(
+          `  factory admin ${owner} != deployer ${ctx.deployer}; skip post-deploy grants — run ConfigureRoles as admin`
+        );
+      } else {
+        const factory = await ctx.viem.getContractAt("PrivacyPortalFactory", address, {
+          client: { public: ctx.publicClient, wallet: ctx.walletClient },
+        });
+        const OPERATOR_ROLE = await factory.read.OPERATOR_ROLE();
+        for (const op of roles.privacyPortalFactory.operators) {
+          const has = await factory.read.hasRole([OPERATOR_ROLE, op]);
+          if (!has) {
+            const h = await factory.write.grantRole([OPERATOR_ROLE, op], { account: ctx.deployer });
+            await waitMined(ctx.publicClient, h);
+            console.log(`  granted OPERATOR_ROLE to ${op}`);
+          }
+        }
+        for (const d of roles.privacyPortalFactory.deployers) {
+          const ok = await factory.read.deployers([d]);
+          if (!ok) {
+            const h = await factory.write.setDeployer([d, true], { account: ctx.deployer });
+            await waitMined(ctx.publicClient, h);
+            console.log(`  setDeployer ${d}`);
+          }
+        }
+      }
+      return address;
     },
     verifyArgs: (ctx) => ppFactoryVerifyArgs(ctx),
   },
