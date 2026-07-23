@@ -2,7 +2,8 @@
  * Deployment verification from `deployConfig.json`.
  *
  * 1. Prints inbox fee templates, gas-price bounds, oracle USD legs, and wiring for each deployed chain.
- * 2. For every source EVM with `mpcAdder` + COTI `cotiExecutor` (e.g. Sepolia, Fuji), runs
+ * 2. Warns when on-chain roles differ from central `deployConfig.roles` (same intent on every chain).
+ * 3. For every source EVM with `mpcAdder` + COTI `cotiExecutor` (e.g. Sepolia, Fuji), runs
  *    `MpcAdder.add` → mine on COTI → mine callback on source (two-way round-trip) and decrypts a+b.
  *
  * Usage:
@@ -23,6 +24,7 @@ import {
   gasPriceBoundsEq,
   getViemClients,
   optionalEnv,
+  readRoles,
   readDeployConfig,
   readFeeConfigForChain,
   readGasPriceBoundsForChain,
@@ -30,6 +32,7 @@ import {
   resolveRpcUrl,
   type GasPriceBoundsTuple,
 } from "./deploy-utils.js";
+import { collectRoleMismatches, formatRoleMismatches } from "./roles-check.js";
 import {
   buildEncryptedInput,
   decodeCtUint64,
@@ -208,7 +211,7 @@ const printChainConfig = async (
   clients: ChainClients,
   chainCfg: Record<string, any>,
   role: "source" | "coti"
-): Promise<{ inbox?: any; oracleOk: boolean; feesOk: boolean; boundsOk: boolean }> => {
+): Promise<{ inbox?: any; oracleOk: boolean; feesOk: boolean; boundsOk: boolean; rolesOk: boolean }> => {
   hr(`${clients.label} (chainId ${clients.chainId})`);
   row("role", role);
   row("deployer", clients.deployer);
@@ -216,13 +219,13 @@ const printChainConfig = async (
   const inboxAddr = chainCfg.inbox;
   if (!isAddr(inboxAddr)) {
     row("inbox", "(not in deployConfig)", false);
-    return { oracleOk: false, feesOk: false, boundsOk: false };
+    return { oracleOk: false, feesOk: false, boundsOk: false, rolesOk: false };
   }
 
   const code = await clients.publicClient.getBytecode({ address: inboxAddr });
   if (!code || code === "0x") {
     row("inbox", `${inboxAddr} (no code)`, false);
-    return { oracleOk: false, feesOk: false, boundsOk: false };
+    return { oracleOk: false, feesOk: false, boundsOk: false, rolesOk: false };
   }
 
   const inbox = await getContract(clients, "Inbox", inboxAddr);
@@ -330,7 +333,28 @@ const printChainConfig = async (
     row("cotiExecutor", isAddr(execAddr) ? execAddr : "(not deployed)", isAddr(execAddr));
   }
 
-  return { inbox, oracleOk, feesOk, boundsOk };
+  section("Roles (deployConfig.roles — global)");
+  const intended = readRoles(clients.deployer, clients.chainId);
+  const mismatches = await collectRoleMismatches({
+    publicClient: clients.publicClient,
+    chainCfg,
+    roles: intended,
+  });
+  const rolesOk = mismatches.length === 0;
+  if (rolesOk) {
+    row("match", "ok", true);
+  } else {
+    console.warn(
+      `  WARN: ${mismatches.length} role mismatch(es) on ${clients.label} vs deployConfig.roles`
+    );
+    row("match", formatRoleMismatches(mismatches), false);
+    for (const m of mismatches) {
+      console.warn(`    ${m.contract}.${m.field}: want ${m.expected} got ${m.actual}`);
+      row(`  ${m.contract}.${m.field}`, `want ${m.expected} got ${m.actual}`, false);
+    }
+  }
+
+  return { inbox, oracleOk, feesOk, boundsOk, rolesOk };
 };
 
 const runAddRoundTrip = async (params: {
@@ -479,7 +503,13 @@ const main = async () => {
   const coti = await connectNetwork("cotiTestnet", "COTI Testnet");
   const cotiStatus = await printChainConfig(coti, cotiCfg, "coti");
 
-  const results: { chain: string; configOk: boolean; roundTrip?: "ok" | "skipped" | "failed"; error?: string }[] = [];
+  const results: {
+    chain: string;
+    configOk: boolean;
+    rolesOk: boolean;
+    roundTrip?: "ok" | "skipped" | "failed";
+    error?: string;
+  }[] = [];
 
   for (const net of SOURCE_NETWORKS) {
     if (CHAIN_FILTER && !CHAIN_FILTER.has(net.name.toLowerCase()) && !CHAIN_FILTER.has(String(net.chainId))) {
@@ -494,12 +524,14 @@ const main = async () => {
     const source = await connectNetwork(net.name, net.label);
     const status = await printChainConfig(source, chainCfg, "source");
     const configOk = !!(status.oracleOk && status.feesOk && status.boundsOk);
+    const rolesOk = !!status.rolesOk;
 
     if (CONFIG_ONLY || !isAddr(chainCfg.mpcAdder)) {
       results.push({
         chain: net.label,
         configOk,
-        roundTrip: !isAddr(chainCfg.mpcAdder) ? "skipped" : "skipped",
+        rolesOk,
+        roundTrip: "skipped",
       });
       if (!isAddr(chainCfg.mpcAdder)) {
         console.log(`\n· no mpcAdder for ${net.label}; skipping add round-trip`);
@@ -519,11 +551,11 @@ const main = async () => {
         a,
         b,
       });
-      results.push({ chain: net.label, configOk, roundTrip: "ok" });
+      results.push({ chain: net.label, configOk, rolesOk, roundTrip: "ok" });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`\n✗ ${net.label} round-trip failed: ${message}`);
-      results.push({ chain: net.label, configOk, roundTrip: "failed", error: message });
+      results.push({ chain: net.label, configOk, rolesOk, roundTrip: "failed", error: message });
     }
   }
 
@@ -531,16 +563,29 @@ const main = async () => {
   row("COTI oracle legs", cotiStatus.oracleOk ? "ok" : "check", cotiStatus.oracleOk);
   row("COTI fee templates", cotiStatus.feesOk ? "match config" : "drift", cotiStatus.feesOk);
   row("COTI gas bounds", cotiStatus.boundsOk ? "match config" : "drift", cotiStatus.boundsOk);
+  row("COTI roles", cotiStatus.rolesOk ? "ok" : "mismatch", cotiStatus.rolesOk);
   for (const r of results) {
     const rt =
       r.roundTrip === "ok" ? "add OK" : r.roundTrip === "failed" ? `add FAILED (${r.error})` : "add skipped";
-    row(r.chain, `config ${r.configOk ? "ok" : "drift"} · ${rt}`, r.roundTrip !== "failed" && r.configOk);
+    const cfgLabel = r.configOk && r.rolesOk ? "ok" : r.rolesOk ? "fee/oracle drift" : "role mismatch";
+    row(r.chain, `config ${cfgLabel} · ${rt}`, r.roundTrip !== "failed" && r.configOk && r.rolesOk);
   }
 
   const failed = results.some((r) => r.roundTrip === "failed");
-  const configDrift = !cotiStatus.oracleOk || !cotiStatus.feesOk || !cotiStatus.boundsOk || results.some((r) => !r.configOk);
-  if (failed) process.exitCode = 1;
-  else if (configDrift) {
+  const roleMismatch = !cotiStatus.rolesOk || results.some((r) => !r.rolesOk);
+  const configDrift =
+    !cotiStatus.oracleOk ||
+    !cotiStatus.feesOk ||
+    !cotiStatus.boundsOk ||
+    results.some((r) => !r.configOk);
+  if (failed) {
+    process.exitCode = 1;
+  } else if (roleMismatch) {
+    console.warn(
+      "\nWARN: role mismatches vs deployConfig.roles — run ConfigureRoles or update the global roles block."
+    );
+    // Warn only: role drift should be visible but does not fail the script by itself.
+  } else if (configDrift) {
     console.log("\n(config drift noted; exit 0 — fix fees/bounds/oracle wiring if intentional)");
   } else {
     console.log("\nAll checks passed.");

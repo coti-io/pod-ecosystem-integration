@@ -8,6 +8,21 @@
     "bytecodeNote": "CreateX deterministic address depends on Inbox creation bytecode, including Ownable(address(1)) placeholder owner in the constructor. Bump `label` (and clear salt/guardedSalt/address) whenever Inbox bytecode changes before redeploying.",
     "runbook": "After inbox deploy: priceOracle (setInboxTokens → seed prices/feeds → refreshCache) → feeConfig (min-fee templates + gasPriceBounds) → wireInboxOracle. On non-EIP-1559 chains (COTI), gasPriceBounds are required."
   },
+  "roles": {
+    "owner": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
+    "miners": [
+      "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae"
+    ],
+    "priceAdmin": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
+    "operators": [
+      "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae"
+    ],
+    "deployers": [
+      "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae"
+    ],
+    "feeRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
+    "rescueRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae"
+  },
   "chains": {
     "1": {
       "inbox": "",
@@ -109,10 +124,10 @@
     },
     "43113": {
       "inbox": "0x3b8B70819f27e0438cBcE7f31894f799da52648F",
-      "priceOracle": "0xf2283ca93a6747c547a961c50d0393d549c57268",
+      "priceOracle": "0x95ce33378c88734f3d86b51a4c6dc588722995fd",
       "oracle": {
         "adapter": "chainlink",
-        "liveAdapter": "0xdeb631df0735984da95f77abc6f394bf27a7c230",
+        "liveAdapter": "0x2bface3f1384f698d640810b9b8d2cb728c9fc28",
         "bandStdRef": "",
         "maxStaleness": 86400,
         "fetchInterval": 300,
@@ -167,9 +182,9 @@
         }
       },
       "mpcAdder": "0x8b7d9e70477aabe68500b72acb7f367993edde39",
-      "portalImplementation": "0x63e97937e42c153cdeb25e9aca9d3d0373aec0a5",
+      "portalImplementation": "0xf7f7472394868e7e32bddbbd2bd66994a40f047b",
       "podTokenImplementation": "0xa7e4838327317f4ce6cc8b5ab07a57fdba842c77",
-      "privacyPortalFactory": "0xf3cf653e1baee7b4e4001067780dee38991b1cbd",
+      "privacyPortalFactory": "0x0e6b35da5aa3e3aeb6f98471821d5b16552efced",
       "privacyPortalFactoryConstructor": {
         "feeRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
         "rescueRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
@@ -190,26 +205,28 @@
       "privacyPortalTokens": {
         "pMTT": {
           "underlying": "0x328e70e1c52662cd5f19f824fcb8b463d77a6686",
-          "portal": "0xf4100d21eB4B1a66aDde58A01D1E32356F268b3F",
-          "pToken": "0xFC6283a9000d7D5Cf8A058A04A9ED90265Af1634"
+          "portal": "0x397b1DE4EbAaC2e522B583120C29ff97F011c84c",
+          "pToken": "0x7BE9Cd10b51eFf6FFCE8f620EA17f6C4dc37a379",
+          "motherRegistrationRequestId": "0x000000000000a86900000000006c11a00000000000000000000000000000007d"
         },
         "pUSDC": {
           "underlying": "0x5425890298aed601595a70AB815c96711a31Bc65",
-          "portal": "0x090D2dc8C38275939b9381Ff2aa53012Ff412E34",
-          "pToken": "0xe2235E064a3CEB5F1765c3b095855549d3c8A8a4"
+          "portal": "0xa15aBf3BBf23795F7F6d018D592B448F3af1A2e5",
+          "pToken": "0x01635605900E3200679079BD35AF0BefF25e2072",
+          "motherRegistrationRequestId": "0x000000000000a86900000000006c11a00000000000000000000000000000007e"
         },
         "pWAVAX": {
           "underlying": "0xd00ae08403B9bbb9124bB305C09058E32C39A48c",
-          "portal": "0x20e7239cd78BDf2E8f34c52947e54fE68D7b536F",
-          "pToken": "0x0c58954d91392794A50F610dF8c84228D63BE9D4",
-          "motherRegistrationRequestId": "0x000000000000a86900000000006c11a000000000000000000000000000000003"
+          "portal": "0x1A775D5a9d034f27dB1328B446088E93BC1bF9EE",
+          "pToken": "0x5910f4f38660A7932485a6De854e9895E6d78D85",
+          "motherRegistrationRequestId": "0x000000000000a86900000000006c11a00000000000000000000000000000007f"
         }
       },
-      "privatePayrollCoti": "0xd523915b48d7985837f5b10ffc6c41dc66313f04",
-      "payrollVault": "0x5c8f11c891bf884a153a98535a65f37903df509c",
-      "payrollClaimStore": "0x5889141489b4f4377cb575888231ebdd7f492064",
-      "payrollCampaignFactory": "0x40eca0ffc86c83bcde80504926a1dd7f8d84a25b",
-      "payrollCampaignFacade": "0xd01e50071FDf432BA74552Ea0d0Cd22367461848",
+      "privatePayrollCoti": "0x81aa3b52ffcbb62bc4391008ceeb0965c0de8640",
+      "payrollVault": "0x41560d11e83369b24c9020a8ec59de98935be377",
+      "payrollClaimStore": "0xd4418977eaa75de172157b456bfb63c1cff297a9",
+      "payrollCampaignFactory": "0x056242ccb7c71165ba0c6e8d1a9b2330ec6aefd0",
+      "payrollCampaignFacade": "0x5EC2693A0f014D32917A9801999B07011b1A9030",
       "gasPriceBounds": {
         "minPriorityFeeWei": "0",
         "minGasPriceWei": "2000000000",
@@ -252,7 +269,6 @@
           "privacyPortalFactory": ""
         }
       },
-      "pErc20Coti": "",
       "cotiMother": "0xaeb2271959031b65cba63302cff5d970b49d4a7b",
       "feeConfig": {
         "local": {
@@ -270,7 +286,7 @@
           "bufferRatioX10000": "5000"
         }
       },
-      "privatePayrollCoti": "0xd523915b48d7985837f5b10ffc6c41dc66313f04",
+      "privatePayrollCoti": "0x81aa3b52ffcbb62bc4391008ceeb0965c0de8640",
       "gasPriceBounds": {
         "minPriorityFeeWei": "0",
         "minGasPriceWei": "2000000000",
@@ -279,10 +295,10 @@
     },
     "11155111": {
       "inbox": "0x3b8B70819f27e0438cBcE7f31894f799da52648F",
-      "priceOracle": "0x3281160888138e786c3eb0f4f4cc51453d8dfeff",
+      "priceOracle": "0x71f0deac8adb89b7f1b09b38e2531e06bcca0b03",
       "oracle": {
         "adapter": "band",
-        "liveAdapter": "0x31bbf71c03854c0fd7949a62509ba867585f7af4",
+        "liveAdapter": "0xd45aecca332bfc00ee295fb0ec407eb2bbec57e6",
         "bandStdRef": "0x8c064bCf7C0DA3B3b090BAbFE8f3323534D84d68",
         "maxStaleness": 0,
         "fetchInterval": 300,
@@ -311,9 +327,9 @@
         }
       },
       "mpcAdder": "0xacc74e07db35fb740509fc82228e631f4f08441c",
-      "portalImplementation": "0x7f36e1eabbee6a1cd724b4ade37fe475f807d982",
+      "portalImplementation": "0xd22f4182d57637dd6f125ae8464a82f5647023cd",
       "podTokenImplementation": "0xe8e2fdd23ea2d5f9bb4632d11f7267602a059e5d",
-      "privacyPortalFactory": "0x0117d640ce96805739cf5f82683b0dd9532541ee",
+      "privacyPortalFactory": "0x6bffca5073e83cde03438cca60feed6e49582044",
       "privacyPortalFactoryConstructor": {
         "feeRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
         "rescueRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
@@ -334,18 +350,21 @@
       "privacyPortalTokens": {
         "pMTT": {
           "underlying": "0xd3f5c63f4D87D2235b295FbA83351d31d0eD1BeE",
-          "portal": "0x621E744eF059262Fd531a0f345d38Ce31d92D105",
-          "pToken": "0x1566ADA98695D39b2D5A8e1359d7Af9D567c74ab"
+          "portal": "0x3af63ceb47E47CD9742F0Cf9C715c5A1c778d548",
+          "pToken": "0xbf5971D4791EaC5c727eE23a613E5f755ED7dE37",
+          "motherRegistrationRequestId": "0x0000000000aa36a700000000006c11a000000000000000000000000000000008"
         },
         "pUSDC": {
           "underlying": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-          "portal": "0x79679CE36664c3b1360501B2c7ea6bbee65a2717",
-          "pToken": "0xc04Cb7256E849C34877D801A77f9165BaC209c06"
+          "portal": "0xc32F55450db6fD66d0Bf5c875e791803271b6862",
+          "pToken": "0x433e0AFDe6b8a0102a1C93aeEd61aE27794ae484",
+          "motherRegistrationRequestId": "0x0000000000aa36a700000000006c11a000000000000000000000000000000009"
         },
         "pWETH": {
           "underlying": "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9",
-          "portal": "0x7666F6576956530E2D56CDB548b71e62286d1d18",
-          "pToken": "0xD586736543F7666d1adbF862B769Ba838a9a3deD"
+          "portal": "0xc666c0eFA5C5DDb953dF3881bC3C54C770bc59A4",
+          "pToken": "0x00A69024717Ae8D6EA128972a52F969951474279",
+          "motherRegistrationRequestId": "0x0000000000aa36a700000000006c11a00000000000000000000000000000000a"
         }
       },
       "feeConfig": {
