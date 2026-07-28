@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import { privateKeyToAccount } from "viem/accounts";
-import { parseEventLogs, parseSignature } from "viem";
+import { parseEventLogs, parseSignature, zeroAddress } from "viem";
 import {
   fundContractForInboxFees,
+  getLatestRequest,
   logStep,
+  mineRequest,
   normalizePrivateKey,
   receiptWaitOptions,
   resolveCotiTestnetPrivateKey,
   runCrossChainTwoWayRoundTrip,
   setupContext,
-  podTwoWayWriteOptions,
   type MineRequestOptions,
   type TestContext,
 } from "../system/mpc-test-utils.js";
@@ -17,11 +18,13 @@ import { oracleTokensForChain } from "../../scripts/oracle-tokens.js";
 import {
   completePodOpRoundTrip,
   getDefaultCotiMineGasPodToken,
+  POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI,
   registerPodTokenOnMother,
   setupBobUser,
   syncPodBalancesRoundTrip,
   type PodTokenTestContext,
 } from "../tokens/test-token-utils.js";
+import { MAX_PACKED_FEE } from "./privacy-portal-utils.js";
 
 export const PP_WITHDRAW_RECIPIENT = "0x00000000000000000000000000000000000000b0" as `0x${string}`;
 
@@ -32,21 +35,51 @@ export type PrivacyPortalSystemContext = PodTokenTestContext & {
   ownerWallet: any;
   /** Default underlying recipient for portal withdrawals (distinct from Bob for pToken flows). */
   withdrawRecipient: `0x${string}`;
+  /** Present when `useFactory: true` (real {PrivacyPortalFactory}). */
+  factory?: any;
+  portalImpl?: any;
+  sepoliaViem?: any;
+  cotiViem?: any;
 };
 
 /** Step log prefix for PP system tests (grep `privacy-portal-system`). */
 export const ppLog = (message: string) => logStep(`privacy-portal-system: ${message}`);
 
-export async function setupPrivacyPortalSystemContext(params: {
+/** Register portal AES key on sim COTI (needed for withdraw offBoard-to-portal). No-op on live. */
+export async function registerPortalAesKeyIfSim(
+  cotiViem: any,
+  portalAddress: `0x${string}`,
+  cotiPk: string
+) {
+  if (!["sim", "simcoti"].includes((process.env.COTI_BACKEND ?? "").trim().toLowerCase())) {
+    return;
+  }
+  const { registerUserOnSim, deriveUserAesKey } = await import("../sim-coti/sim-coti-utils.js");
+  const portalKey = deriveUserAesKey(cotiPk);
+  const [signer] = await cotiViem.getWalletClients();
+  await registerUserOnSim(cotiViem, portalAddress, portalKey, signer.account);
+  ppLog(`simCoti: registered portal AES key for ${portalAddress}`);
+}
+
+type PpSetupCore = {
+  base: TestContext;
+  owner: `0x${string}`;
+  ownerWallet: any;
+  cotiPk: string;
+  podCotiMother: any;
+  underlying: any;
+  bob: Awaited<ReturnType<typeof setupBobUser>>;
+};
+
+/** Shared dual-chain infra: inboxes via `setupContext`, mother, underlying, Bob. */
+async function setupPrivacyPortalInfra(params: {
   sepoliaViem: any;
   cotiViem: any;
-}): Promise<PrivacyPortalSystemContext> {
+}): Promise<PpSetupCore> {
   const base = await setupContext(params);
-
   const cotiPk = normalizePrivateKey(await resolveCotiTestnetPrivateKey());
-  const cotiAccount = privateKeyToAccount(cotiPk as `0x${string}`);
-  const owner = cotiAccount.address;
-  const hardhatCotiWallet = await params.sepoliaViem.getWalletClient(owner);
+  const owner = privateKeyToAccount(cotiPk as `0x${string}`).address;
+  const ownerWallet = await params.sepoliaViem.getWalletClient(owner);
 
   ppLog("deploy PodErc20CotiMother on COTI");
   const podCotiMother = await params.cotiViem.deployContract(
@@ -62,15 +95,156 @@ export async function setupPrivacyPortalSystemContext(params: {
     18,
   ]);
 
+  const bob = await setupBobUser(cotiPk, { cotiViem: params.cotiViem });
+  return { base, owner, ownerWallet, cotiPk, podCotiMother, underlying, bob };
+}
+
+async function fundPortalAndPToken(
+  ownerWallet: any,
+  publicClient: any,
+  portalAddress: `0x${string}`,
+  pTokenAddress: `0x${string}`
+) {
+  ppLog("fund portal and pToken with native inbox fees");
+  await fundContractForInboxFees(ownerWallet, publicClient, pTokenAddress);
+  await fundContractForInboxFees(ownerWallet, publicClient, portalAddress);
+}
+
+/** Mine the latest Sepolia→COTI one-way request (factory `createPortal` mother registration). */
+async function mineLatestMotherRegistration(base: TestContext, label: string) {
+  const outboundRequest = await getLatestRequest(base.contracts.inboxSepolia, base.chainIds.coti);
+  await mineRequest(base, "coti", BigInt(base.chainIds.sepolia), outboundRequest, label, {
+    gas: getDefaultCotiMineGasPodToken(),
+  });
+}
+
+/**
+ * Dual-chain Privacy Portal stack for system tests.
+ * @param useFactory When true, deploy real {PrivacyPortalFactory} + `createPortal` (required for remount).
+ *                   Default false uses MockPrivacyPortalFactory + direct portal/pToken (existing PP system suite).
+ */
+export async function setupPrivacyPortalSystemContext(params: {
+  sepoliaViem: any;
+  cotiViem: any;
+  useFactory?: boolean;
+}): Promise<PrivacyPortalSystemContext> {
+  const infra = await setupPrivacyPortalInfra(params);
+  const { base, owner, ownerWallet, cotiPk, podCotiMother, underlying, bob } = infra;
+  const client = { public: base.sepolia.publicClient, wallet: ownerWallet };
+
+  if (params.useFactory) {
+    ppLog("deploy PrivacyPortal + PodErc20MintableInitializable implementations");
+    const portalImpl = await params.sepoliaViem.deployContract("PrivacyPortal", [], { client });
+    const tokenImpl = await params.sepoliaViem.deployContract("PodErc20MintableInitializable", [], {
+      client,
+    });
+    const { portalNative } = oracleTokensForChain(base.chainIds.sepolia);
+    ppLog(
+      `deploy PrivacyPortalFactory (inbox=${base.contracts.inboxSepolia.address}, mother=${podCotiMother.address})`
+    );
+    const factory = await params.sepoliaViem.deployContract(
+      "PrivacyPortalFactory",
+      [
+        owner,
+        base.contracts.inboxSepolia.address,
+        BigInt(base.chainIds.coti),
+        podCotiMother.address,
+        tokenImpl.address,
+        portalImpl.address,
+        owner,
+        owner,
+        portalNative,
+        zeroAddress,
+        0n,
+        0n,
+        MAX_PACKED_FEE,
+        0n,
+        0n,
+        MAX_PACKED_FEE,
+      ],
+      { client }
+    );
+
+    ppLog("allowlist factory on COTI mother");
+    await podCotiMother.write.setAllowedFactory(
+      [BigInt(base.chainIds.sepolia), factory.address, true],
+      { account: base.coti.wallet.account }
+    );
+
+    ppLog("createPortal (one-way mother registration)");
+    const createHash = await factory.write.createPortal(
+      [underlying.address, "Private TUSD", "pTUSD", 18, false],
+      {
+        account: owner,
+        value: POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI,
+        gas: 5_000_000n,
+      }
+    );
+    await base.sepolia.publicClient.waitForTransactionReceipt({
+      hash: createHash,
+      ...receiptWaitOptions,
+    });
+
+    const portalAddress = (await factory.read.portalForUnderlying([
+      underlying.address,
+    ])) as `0x${string}`;
+    const pTokenAddress = (await factory.read.pTokenForUnderlying([
+      underlying.address,
+    ])) as `0x${string}`;
+    assert.notEqual(portalAddress.toLowerCase(), zeroAddress);
+    assert.notEqual(pTokenAddress.toLowerCase(), zeroAddress);
+
+    ppLog(`mine mother registration for pToken=${pTokenAddress}`);
+    await mineLatestMotherRegistration(base, "ppFactoryRegister");
+    assert.ok(
+      await podCotiMother.read.isRegistered([BigInt(base.chainIds.sepolia), pTokenAddress]),
+      "pToken namespace not registered on COTI mother"
+    );
+
+    const portal = await params.sepoliaViem.getContractAt("PrivacyPortal", portalAddress, {
+      client,
+    });
+    const pod = await params.sepoliaViem.getContractAt(
+      "PodErc20MintableInitializable",
+      pTokenAddress,
+      { client }
+    );
+    await registerPortalAesKeyIfSim(params.cotiViem, portalAddress, cotiPk);
+    await fundPortalAndPToken(ownerWallet, base.sepolia.publicClient, portalAddress, pTokenAddress);
+
+    ppLog(
+      `setup complete (factory=${factory.address}, portal=${portalAddress}, pToken=${pTokenAddress})`
+    );
+    return {
+      base,
+      pod,
+      podAsCoti: pod,
+      podCotiMother,
+      owner,
+      ownerWallet,
+      bob,
+      portal,
+      underlying,
+      withdrawRecipient: PP_WITHDRAW_RECIPIENT,
+      factory,
+      portalImpl,
+      sepoliaViem: params.sepoliaViem,
+      cotiViem: params.cotiViem,
+    };
+  }
+
   ppLog("deploy PrivacyPortal clone + PodErc20Mintable (minter = portal)");
   const { portalNative } = oracleTokensForChain(11155111);
-  const mockFactory = await params.sepoliaViem.deployContract("MockPrivacyPortalFactory", [owner, portalNative]);
+  const mockFactory = await params.sepoliaViem.deployContract("MockPrivacyPortalFactory", [
+    owner,
+    portalNative,
+  ]);
   const cloneHelper = await params.sepoliaViem.deployContract("CloneHelper", []);
   const portalImpl = await params.sepoliaViem.deployContract("PrivacyPortal", []);
   await cloneHelper.write.clone([portalImpl.address], { account: owner });
   const portalAddress = (await cloneHelper.read.lastClone()) as `0x${string}`;
   const portal = await params.sepoliaViem.getContractAt("PrivacyPortal", portalAddress, {
-    client: { public: base.sepolia.publicClient, wallet: hardhatCotiWallet },
+    client,
   });
   const pod = await params.sepoliaViem.deployContract("PodErc20Mintable", [
     portal.address,
@@ -85,21 +259,12 @@ export async function setupPrivacyPortalSystemContext(params: {
     account: owner,
   });
 
-  // Withdraw transferFromAndCall offBoards ciphertexts to the portal address; sim requires an AES key.
-  if (["sim", "simcoti"].includes((process.env.COTI_BACKEND ?? "").trim().toLowerCase())) {
-    const { registerUserOnSim, deriveUserAesKey } = await import("../sim-coti/sim-coti-utils.js");
-    const portalKey = deriveUserAesKey(cotiPk);
-    const [signer] = await params.cotiViem.getWalletClients();
-    await registerUserOnSim(params.cotiViem, portal.address as `0x${string}`, portalKey, signer.account);
-    ppLog(`simCoti: registered portal AES key for ${portal.address}`);
-  }
-
-  ppLog("fund portal and pToken with native inbox fees");
-  await fundContractForInboxFees(hardhatCotiWallet, base.sepolia.publicClient, pod.address as `0x${string}`);
-  await fundContractForInboxFees(
-    hardhatCotiWallet,
+  await registerPortalAesKeyIfSim(params.cotiViem, portalAddress, cotiPk);
+  await fundPortalAndPToken(
+    ownerWallet,
     base.sepolia.publicClient,
-    portal.address as `0x${string}`
+    portalAddress,
+    pod.address as `0x${string}`
   );
 
   ppLog("register pToken namespace on COTI mother");
@@ -114,10 +279,8 @@ export async function setupPrivacyPortalSystemContext(params: {
   });
 
   const podAsCoti = await params.sepoliaViem.getContractAt("PodErc20Mintable", pod.address, {
-    client: { public: base.sepolia.publicClient, wallet: hardhatCotiWallet },
+    client,
   });
-
-  const bob = await setupBobUser(cotiPk, { cotiViem: params.cotiViem });
 
   ppLog(
     `setup complete (owner=${owner}, portal=${portal.address}, pToken=${pod.address}, mother=${podCotiMother.address})`
@@ -128,7 +291,7 @@ export async function setupPrivacyPortalSystemContext(params: {
     podAsCoti,
     podCotiMother,
     owner,
-    ownerWallet: hardhatCotiWallet,
+    ownerWallet,
     bob,
     portal,
     underlying,
