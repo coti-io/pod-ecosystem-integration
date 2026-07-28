@@ -126,9 +126,9 @@ Reads:
 
 Writes:
 
-- `deposit(address recipient, uint256 amount, uint256 mintCallbackFee) payable -> bytes32 requestId`
-- `depositNative(address recipient, uint256 amount, uint256 mintCallbackFee) payable -> bytes32 requestId` — only when `nativeWrappedUnderlying`; wraps `amount` via WETH/WAVAX `deposit()`, then mints pTokens.
-- `requestWithdrawWithPermit(address recipient, uint256 amount, uint256 transferFee, uint256 transferCallbackFee, uint256 burnFee, uint256 burnCallbackFee, uint256 permitDeadline, uint8 v, bytes32 r, bytes32 s) payable -> (bytes32 withdrawalId, bytes32 transferRequestId)`
+- `deposit(address recipient, uint256 amount, uint256 portalFee, uint256 mintCallbackFee) payable -> bytes32 requestId`
+- `depositNative(address recipient, uint256 amount, uint256 portalFee, uint256 mintCallbackFee) payable -> bytes32 requestId` — only when `nativeWrappedUnderlying`; wraps `amount` via WETH/WAVAX `deposit()`, then mints pTokens. `msg.value = amount + mintTotalFee + portalFee`.
+- `requestWithdrawWithPermit(address recipient, uint256 amount, uint256 portalFee, uint256 transferFee, uint256 transferCallbackFee, uint256 permitDeadline, uint8 v, bytes32 r, bytes32 s) payable -> (bytes32 withdrawalId, bytes32 transferRequestId)`
 
 Withdraw release: when `nativeWrappedUnderlying`, the portal calls `underlying.withdraw(amount)` and sends native coin to the recipient; otherwise it transfers the ERC20.
 
@@ -238,11 +238,14 @@ export const privacyPortalAbi = [
     { type: "uint256" }, { type: "bytes32" }, { type: "bytes32" }, { type: "uint8" }
   ] },
   { type: "function", name: "deposit", stateMutability: "payable", inputs: [
-    { type: "address" }, { type: "uint256" }, { type: "uint256" }
+    { type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }
+  ], outputs: [{ type: "bytes32" }] },
+  { type: "function", name: "depositNative", stateMutability: "payable", inputs: [
+    { type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }
   ], outputs: [{ type: "bytes32" }] },
   { type: "function", name: "requestWithdrawWithPermit", stateMutability: "payable", inputs: [
     { type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" },
-    { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint8" },
+    { type: "uint256" }, { type: "uint256" }, { type: "uint8" },
     { type: "bytes32" }, { type: "bytes32" }
   ], outputs: [{ type: "bytes32" }, { type: "bytes32" }] },
   { type: "event", name: "DepositRequested", inputs: [

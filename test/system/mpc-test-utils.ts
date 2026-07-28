@@ -725,6 +725,9 @@ export const mineRequest = async (
       [
         {
           requestId: nextRequestId,
+          // Dual miners (PEI mineRequest / payroll relayer vs CMS pod-inbox-relay) both map
+          // sourceContract ← originalSender. On current Inbox, callerContract == originalSender
+          // == msg.sender, so the collapse is correct; keep both aligned if those fields diverge.
           sourceContract: request.originalSender,
           targetContract: request.targetContract,
           methodCall: request.methodCall,
