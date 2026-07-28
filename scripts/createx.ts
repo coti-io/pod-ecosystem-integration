@@ -23,8 +23,9 @@ export const CREATEX_ADDRESS = getAddress("0xba5Ed099633D3B313e4D5F7bdc1305d3c28
  * Salt label for the deterministic Inbox. Combined with the deployer address and a
  * cross-chain-protection byte set to 0x00, this yields the SAME CREATE3 address on every
  * chain for a given deployer. Bump the version suffix to mint a fresh address family.
+ * Keep in sync with `deployConfig.json` → `inboxSalt.label` (currently `pod.inbox.v2.2`).
  */
-export const INBOX_SALT_LABEL = "pod.inbox.v2.0";
+export const INBOX_SALT_LABEL = "pod.inbox.v2.2";
 
 /** Minimal CreateX ABI: CREATE3 deploy-and-init plus the address precompute view. */
 export const CREATEX_ABI = [
