@@ -2,6 +2,8 @@
 
 For a contract-level comparison of PoD PrivacyPortal vs COTI PrivacyBridge (flows, fees, configuration drift), see [`docs/PRIVACY-PORTAL-VS-PRIVACY-BRIDGE-COMPARISON.md`](../../docs/PRIVACY-PORTAL-VS-PRIVACY-BRIDGE-COMPARISON.md).
 
+**Admin ops — portal remount / upgrade (same pToken):** [`docs/admin/PORTAL_UPGRADE_CHECKLIST.md`](../../docs/admin/PORTAL_UPGRADE_CHECKLIST.md).
+
 All scripts use the existing Hardhat network config and `deployConfig.json` inbox addresses unless an env override is supplied.
 
 ## Supported collateral (Sepolia + Fuji)
