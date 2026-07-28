@@ -117,8 +117,8 @@ When the factory creates a portal with `nativeWrappedUnderlying = true` (pWETH /
 **Deposit — one transaction:**
 
 ```solidity
-portal.depositNative(recipient, amount, mintCallbackFee) payable
-// msg.value = amount + mintFee  (mintFee forwarded to pToken.mint)
+portal.depositNative(recipient, amount, portalFee, mintCallbackFee) payable
+// msg.value = amount + mintTotalFee + portalFee  (mint fee forwarded to pToken.mint)
 ```
 
 The portal calls `WETH.deposit{value: amount}()` / `WAVAX.deposit{value: amount}()` internally, then mints pTokens.
