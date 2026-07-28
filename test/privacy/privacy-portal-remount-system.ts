@@ -19,13 +19,13 @@ import {
   ppLog,
   readDecryptedBalance,
   seedZeroBalanceOnPod,
+  setupPrivacyPortalSystemContext,
   withdrawAndComplete,
+  type PrivacyPortalSystemContext,
 } from "./privacy-portal-system-utils.js";
 import {
   migrateCollateralAndUnpause,
   remountPausedPortal,
-  setupPrivacyPortalRemountContext,
-  type PrivacyPortalRemountContext,
 } from "./privacy-portal-remount-system-utils.js";
 
 const runRemount = process.env.PP_REMOUNT_SYSTEM_TESTS === "1";
@@ -40,20 +40,20 @@ if (!runRemount) {
 d("PrivacyPortal remount (Sepolia ↔ COTI system)", { concurrency: 1 }, async function () {
   const { sepoliaViem, cotiViem } = await connectDualChainForTests();
 
-  let ctx: PrivacyPortalRemountContext;
+  let ctx: PrivacyPortalSystemContext;
 
   afterEach(async function () {
     if (ctx) await collectInboxFeesAfterTest(ctx.base);
   });
 
   before(async function () {
-    ppLog("before: deploy factory portal stack for remount E2E");
+    ppLog("before: shared PP system setup with real factory (useFactory)");
     if (process.env.COTI_REUSE_CONTRACTS === undefined) {
       process.env.COTI_REUSE_CONTRACTS = "false";
     }
-    ctx = await setupPrivacyPortalRemountContext({ sepoliaViem, cotiViem });
+    ctx = await setupPrivacyPortalSystemContext({ sepoliaViem, cotiViem, useFactory: true });
     await seedZeroBalanceOnPod(ctx, ctx.owner, "seedOwnerZero");
-    ppLog(`before: ready (factory=${ctx.factory.address}, portal=${ctx.portal.address})`);
+    ppLog(`before: ready (factory=${ctx.factory!.address}, portal=${ctx.portal.address})`);
   });
 
   it("reverts remount when old portal is not paused", async function () {
