@@ -3,6 +3,8 @@
  *
  * Hardhat build-info may store solcLongVersion without commit hash; Etherscan requires
  * v0.8.28+commit.7893614a. This script patches that once, then runs hardhat verify.
+ *
+ * Inbox + COTI mother are read from deployConfig (SoT) — never hard-coded legacy salts.
  */
 import { spawn } from "node:child_process";
 import {
@@ -14,9 +16,7 @@ import {
 } from "./deploy-utils.js";
 
 const OWNER = "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae";
-const INBOX = "0xAb625bE229F603f6BBF964474AFf6d5487e364De";
-const MOTHER = "0x293daf267bf657b0bae870a0ce8cd59f1e5eb32a";
-const COTI = "7082400";
+const COTI_CHAIN_ID = "7082400";
 const MAX_FEE = "340282366920938463463374607431768211455";
 
 type Job = { network: string; address: string; args: string[]; label: string };
@@ -38,7 +38,19 @@ const runVerify = (network: string, address: string, args: string[]): Promise<vo
 const isAddr = (v?: string): v is string =>
   typeof v === "string" && v.startsWith("0x") && v.length === 42;
 
-const factoryConstructorArgs = (chainId: number, chain: Record<string, any>): string[] => {
+const requireAddr = (label: string, v?: string): string => {
+  if (!isAddr(v)) {
+    throw new Error(`[verify] missing/invalid ${label} in deployConfig`);
+  }
+  return v;
+};
+
+const factoryConstructorArgs = (
+  chainId: number,
+  chain: Record<string, any>,
+  inbox: string,
+  mother: string
+): string[] => {
   const stored = (chain.privacyPortalFactoryConstructor ?? {}) as {
     feeRecipient?: string;
     rescueRecipient?: string;
@@ -69,9 +81,9 @@ const factoryConstructorArgs = (chainId: number, chain: Record<string, any>): st
 
   return [
     OWNER,
-    INBOX,
-    COTI,
-    MOTHER,
+    inbox,
+    COTI_CHAIN_ID,
+    mother,
     chain.podTokenImplementation,
     chain.portalImplementation,
     feeRecipient,
@@ -87,7 +99,13 @@ const factoryConstructorArgs = (chainId: number, chain: Record<string, any>): st
   ];
 };
 
-const jobsForChain = (network: string, chainId: number, chain: Record<string, any>): Job[] => {
+const jobsForChain = (
+  network: string,
+  chainId: number,
+  chain: Record<string, any>,
+  inbox: string,
+  mother: string
+): Job[] => {
   const jobs: Job[] = [];
   const push = (label: string, address?: string, args: string[] = []) => {
     if (address && address.startsWith("0x") && address.length === 42) {
@@ -97,7 +115,11 @@ const jobsForChain = (network: string, chainId: number, chain: Record<string, an
 
   push("portalImplementation", chain.portalImplementation);
   push("podTokenImplementation", chain.podTokenImplementation);
-  push("privacyPortalFactory", chain.privacyPortalFactory, factoryConstructorArgs(chainId, chain));
+  push(
+    "privacyPortalFactory",
+    chain.privacyPortalFactory,
+    factoryConstructorArgs(chainId, chain, inbox, mother)
+  );
 
   return jobs;
 };
@@ -105,11 +127,20 @@ const jobsForChain = (network: string, chainId: number, chain: Record<string, an
 const main = async () => {
   patchBuildInfoSolcLongVersion();
   const cfg = await readDeployConfig();
+  const coti = (cfg.chains[COTI_CHAIN_ID] ?? {}) as Record<string, any>;
+  const mother = requireAddr("chains.7082400.cotiMother", coti.cotiMother);
+
+  const sepolia = (cfg.chains["11155111"] ?? {}) as Record<string, any>;
+  const fuji = (cfg.chains["43113"] ?? {}) as Record<string, any>;
+  const sepoliaInbox = requireAddr("chains.11155111.inbox", sepolia.inbox);
+  const fujiInbox = requireAddr("chains.43113.inbox", fuji.inbox);
+
   const jobs: Job[] = [
-    ...jobsForChain("sepolia", 11155111, cfg.chains["11155111"] ?? {}),
-    ...jobsForChain("avalancheFuji", 43113, cfg.chains["43113"] ?? {}),
+    ...jobsForChain("sepolia", 11155111, sepolia, sepoliaInbox, mother),
+    ...jobsForChain("avalancheFuji", 43113, fuji, fujiInbox, mother),
   ];
 
+  console.log(`[verify] SoT inbox sepolia=${sepoliaInbox} fuji=${fujiInbox} mother=${mother}`);
   console.log(`[verify] ${jobs.length} contracts to verify`);
   for (const job of jobs) {
     console.log(`\n[verify] ${job.network} ${job.label} ${job.address}`);
