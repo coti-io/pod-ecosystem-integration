@@ -4,14 +4,12 @@
  * Usage:
  *   INBOX_ADDRESS=0x... npx hardhat run scripts/deploy-mpc-executor.ts --network cotiTestnet
  *
- * Or use the inbox from `deployConfig.json` for the connected chain:
+ * Or use the inbox from deploy config YAML for the connected chain:
  *   READ_INBOX_FROM_CONFIG=true npx hardhat run scripts/deploy-mpc-executor.ts --network cotiTestnet
  *
  * Optional:
- *   UPDATE_DEPLOY_CONFIG=true  — write `chains[chainId].cotiExecutor` in deployConfig.json
+ *   UPDATE_DEPLOY_CONFIG=true  — write `chains[chainId].cotiExecutor` in deploy config
  */
-import fs from "node:fs/promises";
-import path from "path";
 import { network } from "hardhat";
 import {
   appendDeploymentLog,
@@ -20,8 +18,7 @@ import {
   optionalEnv,
   readDeployConfig,
 } from "./deploy-utils.js";
-
-const deployConfigPath = path.resolve(process.cwd(), "deployConfig.json");
+import { writeDeployConfig } from "./deploy-config.js";
 
 const main = async () => {
   console.log("[deploy-mpc-executor] Connecting");
@@ -35,16 +32,15 @@ const main = async () => {
   const networkLabel = chainName ?? "unknown";
   console.log(`[deploy-mpc-executor] chainId=${chainId} network=${networkLabel}`);
 
-  let inboxAddress: `0x${string}`;
   const deployConfig = await readDeployConfig();
   const chainKey = String(chainId);
   const fromConfig = deployConfig.chains?.[chainKey]?.inbox;
   if (!fromConfig) {
     throw new Error(
-      `[deploy-mpc-executor] deployConfig.chains.${chainKey}.inbox is missing or empty (set INBOX_ADDRESS or add inbox to deployConfig.json)`
+      `[deploy-mpc-executor] deployConfig.chains.${chainKey}.inbox is missing or empty (set INBOX_ADDRESS or add inbox to deploy config YAML)`
     );
   }
-  inboxAddress = asAddress(fromConfig, `deployConfig.chains.${chainKey}.inbox`);
+  const inboxAddress = asAddress(fromConfig, `deployConfig.chains.${chainKey}.inbox`);
   console.log(`[deploy-mpc-executor] Inbox from deployConfig: ${inboxAddress}`);
 
   console.log("[deploy-mpc-executor] Deploying MpcExecutor...");
@@ -61,13 +57,13 @@ const main = async () => {
   });
 
   if (optionalEnv("UPDATE_DEPLOY_CONFIG") === "true") {
-    const deployConfig = await readDeployConfig();
-    deployConfig.chains ??= {};
-    const chainKey = String(chainId);
-    deployConfig.chains[chainKey] ??= {};
-    deployConfig.chains[chainKey].cotiExecutor = mpcExecutor.address;
-    await fs.writeFile(deployConfigPath, `${JSON.stringify(deployConfig, null, 2)}\n`, "utf8");
-    console.log(`[deploy-mpc-executor] Updated deployConfig.json chains.${chainKey}.cotiExecutor`);
+    const cfg = await readDeployConfig();
+    cfg.chains ??= {};
+    const key = String(chainId);
+    cfg.chains[key] ??= {};
+    cfg.chains[key].cotiExecutor = mpcExecutor.address;
+    await writeDeployConfig(cfg);
+    console.log(`[deploy-mpc-executor] Updated deploy config chains.${key}.cotiExecutor`);
   }
 
   console.log("[deploy-mpc-executor] Done");

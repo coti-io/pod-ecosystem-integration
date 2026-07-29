@@ -4,24 +4,23 @@ For a contract-level comparison of PoD PrivacyPortal vs COTI PrivacyBridge (flow
 
 **Admin ops — portal remount / upgrade (same pToken):** [`docs/admin/PORTAL_UPGRADE_CHECKLIST.md`](../../docs/admin/PORTAL_UPGRADE_CHECKLIST.md).
 
-All scripts use the existing Hardhat network config and `deployConfig.json` inbox addresses unless an env override is supplied.
+All scripts use the existing Hardhat network config and deploy config YAML (`DEPLOY_CONFIG`, default `deployConfig.testnet.yaml`) unless an env override is supplied.
 
-## Supported collateral (Sepolia + Fuji)
+**Mainnet runbooks:** [`docs/mainnet/01-pod-inbox-launch.md`](../../docs/mainnet/01-pod-inbox-launch.md), [`docs/mainnet/02-privacy-portal-launch.md`](../../docs/mainnet/02-privacy-portal-launch.md).
 
-| Private pToken | Sepolia underlying | Fuji underlying | Test funds |
-|----------------|------------------|-----------------|------------|
-| pMTT | Mock MTT (deployed) | Mock MTT (deployed) | minted by deploy-cli |
-| pUSDC | Circle USDC `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` | Circle USDC `0x5425890298aed601595a70AB815c96711a31Bc65` | [Circle Faucet](https://faucet.circle.com) |
-| pWETH | WETH `0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9` | — | wrap Sepolia ETH via `deposit()` |
-| pWAVAX | — | WAVAX `0xd00ae08403B9bbb9124bB305C09058E32C39A48c` | [Fuji AVAX faucet](https://core.app/tools/testnet-faucet/) + `deposit()` |
+## Supported collateral
 
-Canonical addresses live in `canonical-collateral.ts` (shared with `deploy-cli.ts`).
+Token lists are **data-driven** from `chains.<id>.privacyPortalTokens` in the active YAML (testnet or mainnet). No hardcoded CLI token registry.
+
+Testnet examples (Sepolia + Fuji) are recorded in `deployConfig.testnet.yaml`. Mainnet underlyings live in `deployConfig.mainnet.yaml`.
+
+Canonical address *hints* (optional) live in `canonical-collateral.ts`.
 
 **Oracle pricing:** `PoDPriceOracle` delegates live reads to a registered adapter (`ChainlinkLiveOracle` or `BandLiveOracle`). **Portal** calls `getLivePrices(nativeToken, underlying)` per tx; **inbox** uses cached legs refreshed by `refreshCache()`. Manual pegs (`setTokenPriceUSD`, inbox legs) are set at deploy — e.g. pUSDC **$1 USD peg**.
 
 ### Oracle via `deploy:cli`
 
-Per-chain oracle settings live in `deployConfig.json` under `chains[chainId].oracle`:
+Per-chain oracle settings live under `chains[chainId].oracle` in the deploy YAML (including `oracle.legs` for inbox/portal native tokens):
 
 ```json
 "oracle": {

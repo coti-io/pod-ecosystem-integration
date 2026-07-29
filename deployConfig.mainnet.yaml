@@ -1,0 +1,225 @@
+# PoD deploy config — MAINNET (Ethereum, Avalanche C-Chain, COTI mainnet).
+# Select with: DEPLOY_CONFIG=deployConfig.mainnet.yaml
+# CreateX on COTI mainnet: 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed
+# CreateX deploy tx: 0xb6274b80bc7cda162df89894c7748a5cb7ba2eaa6004183c41a1837c3b072f1e
+# No Sablier/payroll addresses.
+forks:
+  enabled: false
+  sourceRpc: http://127.0.0.1:8545
+  cotiRpc: http://127.0.0.1:8546
+  label: LIVE
+inboxSalt:
+  label: pod.inbox.v2.2
+  deployer: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  salt: '0xdF9F8FcA4591227C092FCBAb45A846C19fb6d1ae001fb9f7e3c0a1d0b8afd4c1'
+  guardedSalt: '0xc56d3f92a63cc05db162a4fcaf61a45a2469b9cca77f23db895484b9e8d2fd22'
+  address: '0x3b8B70819f27e0438cBcE7f31894f799da52648F'
+  bytecodeNote: CreateX deterministic address depends on Inbox creation bytecode, including Ownable(address(1)) placeholder
+    owner in the constructor. Bump `label` (and clear salt/guardedSalt/address) whenever Inbox bytecode changes before redeploying.
+  runbook: 'After inbox deploy: priceOracle (setInboxTokens → seed prices/feeds → refreshCache) → feeConfig (min-fee templates
+    + gasPriceBounds) → wireInboxOracle. On non-EIP-1559 chains (COTI), gasPriceBounds are required.'
+roles:
+  owner: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  miners:
+  - '0x075445b969E2a39E096Dd1FBE9A323ae3353fB76'
+  - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  priceAdmin: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  operators:
+  - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  deployers:
+  - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  feeRecipient: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  rescueRecipient: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+chains:
+  '1':
+    inbox: ''
+    portalImplementation: ''
+    podTokenImplementation: ''
+    privacyPortalFactory: ''
+    priceOracle: ''
+    mpcAdder: ''
+    oracle:
+      adapter: chainlink
+      maxStaleness: 3600
+      fetchInterval: 300
+      legs:
+        localToken: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
+        remoteToken: '0x000000000000000000000000000000000000C071'
+        portalNative: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
+      feeds:
+        inboxLocal:
+          chainlink: '0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419'
+        inboxRemote: {}
+        collateral:
+          USDC:
+            pegUsd: '1'
+          WETH:
+            chainlink: '0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419'
+      manualLegs: {}
+      consumers:
+        inbox: ''
+        privacyPortalFactory: ''
+    feeConfig:
+      local:
+        constantFee: '0'
+        gasPerByte: '10'
+        callbackExecutionGas: '100000'
+        errorLength: '300'
+        bufferRatioX10000: '5000'
+      remote:
+        constantFee: '12000000'
+        gasPerByte: '0'
+        callbackExecutionGas: '0'
+        errorLength: '0'
+        bufferRatioX10000: '0'
+    portalFee:
+      deposit:
+        fixedFee: '10000000000000'
+        percentageBps: '500'
+        maxFee: '100000000000000000'
+      withdraw:
+        fixedFee: '10000000000000'
+        percentageBps: '500'
+        maxFee: '100000000000000000'
+    gasPriceBounds:
+      minPriorityFeeWei: '0'
+      minGasPriceWei: '2000000000'
+      maxGasPriceWei: '0'
+    privacyPortalTokens:
+      p.USDC:
+        underlying: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
+        pName: Private USDC
+        pSymbol: pUSDC
+        decimals: 6
+        underlyingKind: canonical
+        underlyingLabel: USDC
+        canonicalKey: USDC
+        portal: ''
+        pToken: ''
+      p.WETH:
+        underlying: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
+        pName: Private WETH
+        pSymbol: pWETH
+        decimals: 18
+        underlyingKind: canonical
+        underlyingLabel: WETH (wrap ETH)
+        canonicalKey: WETH
+        portal: ''
+        pToken: ''
+  '43114':
+    inbox: ''
+    portalImplementation: ''
+    podTokenImplementation: ''
+    privacyPortalFactory: ''
+    priceOracle: ''
+    mpcAdder: ''
+    oracle:
+      adapter: chainlink
+      maxStaleness: 3600
+      fetchInterval: 300
+      legs:
+        localToken: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7'
+        remoteToken: '0x000000000000000000000000000000000000C071'
+        portalNative: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7'
+      feeds:
+        inboxLocal:
+          chainlink: '0x0A77230d17318075983913bC2145DB16C7366156'
+        inboxRemote: {}
+        collateral:
+          USDC:
+            pegUsd: '1'
+          WAVAX:
+            chainlink: '0x0A77230d17318075983913bC2145DB16C7366156'
+      manualLegs: {}
+      consumers:
+        inbox: ''
+        privacyPortalFactory: ''
+    feeConfig:
+      local:
+        constantFee: '0'
+        gasPerByte: '10'
+        callbackExecutionGas: '100000'
+        errorLength: '300'
+        bufferRatioX10000: '5000'
+      remote:
+        constantFee: '12000000'
+        gasPerByte: '0'
+        callbackExecutionGas: '0'
+        errorLength: '0'
+        bufferRatioX10000: '0'
+    portalFee:
+      deposit:
+        fixedFee: '10000000000000'
+        percentageBps: '500'
+        maxFee: '100000000000000000'
+      withdraw:
+        fixedFee: '10000000000000'
+        percentageBps: '500'
+        maxFee: '100000000000000000'
+    gasPriceBounds:
+      minPriorityFeeWei: '0'
+      minGasPriceWei: '25000000000'
+      maxGasPriceWei: '0'
+    privacyPortalTokens:
+      p.USDC:
+        underlying: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9fcd248'
+        pName: Private USDC
+        pSymbol: pUSDC
+        decimals: 6
+        underlyingKind: canonical
+        underlyingLabel: USDC
+        canonicalKey: USDC
+        portal: ''
+        pToken: ''
+      p.WAVAX:
+        underlying: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7'
+        pName: Private WAVAX
+        pSymbol: pWAVAX
+        decimals: 18
+        underlyingKind: canonical
+        underlyingLabel: WAVAX (wrap AVAX)
+        canonicalKey: WAVAX
+        portal: ''
+        pToken: ''
+  '2632500':
+    inbox: ''
+    cotiExecutor: ''
+    cotiMother: ''
+    priceOracle: ''
+    oracle:
+      adapter: plain
+      maxStaleness: 86400
+      fetchInterval: 300
+      legs:
+        localToken: '0x000000000000000000000000000000000000C071'
+        remoteToken: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
+        portalNative: '0x000000000000000000000000000000000000C071'
+      feeds:
+        inboxLocal: {}
+        inboxRemote: {}
+        collateral:
+          USDC:
+            pegUsd: '1'
+      manualLegs:
+        localUsdSpot: '0.05'
+        remoteUsdSpot: '3000'
+      consumers:
+        inbox: ''
+        privacyPortalFactory: ''
+    feeConfig:
+      local:
+        constantFee: '12000000'
+        gasPerByte: '0'
+        callbackExecutionGas: '0'
+        errorLength: '0'
+        bufferRatioX10000: '0'
+      remote:
+        constantFee: '0'
+        gasPerByte: '10'
+        callbackExecutionGas: '100000'
+        errorLength: '300'
+        bufferRatioX10000: '5000'
+    gasPriceBounds:
+      minPriorityFeeWei: '0'
+      minGasPriceWei: '2000000000'
+      maxGasPriceWei: '50000000000'

@@ -17,6 +17,11 @@ import {
 } from "./createx.js";
 import { MANUAL_USD_PEG_18, usdcUnderlyingForChain } from "./privacyPortal/oracle-pegs.js";
 import { canonicalUnderlying } from "./privacyPortal/canonical-collateral.js";
+import {
+  getDeployConfigPath,
+  readDeployConfig as readDeployConfigYaml,
+  readDeployConfigSync,
+} from "./deploy-config.js";
 
 /** Etherscan requires the full solc commit suffix; Hardhat build-info may omit it. */
 export const patchBuildInfoSolcLongVersion = (longVersion = "0.8.28+commit.7893614a") => {
@@ -99,9 +104,11 @@ type DeploymentLogEntry = {
 };
 
 const logPath = path.resolve(process.cwd(), "deployment.log");
-const deployConfigPath = path.resolve(process.cwd(), "deployConfig.json");
 
-/** Fee template as stored in deployConfig.json (string|number for JSON safety with large values). */
+/** Resolved at call time so DEPLOY_CONFIG overrides apply. */
+const deployConfigPath = (): string => getDeployConfigPath();
+
+/** Fee template as stored in deploy config (string|number for JSON safety with large values). */
 export type FeeConfigJson = {
   constantFee: string | number;
   gasPerByte: string | number;
@@ -416,7 +423,7 @@ export const resolveChainRoles = (params: {
 
 /** Sync read of central roles from deployConfig.json (same for all chains). */
 export const readRoles = (deployer: `0x${string}`, chainId?: number): ResolvedChainRoles => {
-  const cfg = JSON.parse(fsSync.readFileSync(deployConfigPath, "utf8")) as DeployConfig;
+  const cfg = readDeployConfigSync() as DeployConfig;
   if (cfg.roles == null) {
     console.warn("  roles: deployConfig.roles missing; falling back to env/deployer");
   }
@@ -757,7 +764,7 @@ export const readPortalFeeConfigSync = (
   chainId: number
 ): { deposit: PortalFeeConfigTuple; withdraw: PortalFeeConfigTuple } => {
   try {
-    const cfg = JSON.parse(fsSync.readFileSync(deployConfigPath, "utf8")) as DeployConfig;
+    const cfg = readDeployConfigSync() as DeployConfig;
     const pf = cfg.chains?.[String(chainId)]?.portalFee;
     if (pf?.deposit && pf?.withdraw) {
       return {
@@ -868,7 +875,7 @@ export const readGasPriceBoundsForChain = async (chainId: number): Promise<GasPr
 
 export const readGasPriceBoundsForChainSync = (chainId: number): GasPriceBoundsTuple => {
   try {
-    const cfg = JSON.parse(fsSync.readFileSync(deployConfigPath, "utf8")) as DeployConfig;
+    const cfg = readDeployConfigSync() as DeployConfig;
     const bounds = cfg.chains?.[String(chainId)]?.gasPriceBounds;
     if (bounds?.minGasPriceWei != null) {
       return gasPriceBoundsFromJson(bounds);
@@ -1621,10 +1628,8 @@ export const appendDeploymentLog = async (entry: DeploymentLogEntry) => {
   await fs.appendFile(logPath, `${JSON.stringify(payload)}\n`, "utf8");
 };
 
-export const readDeployConfig = async (): Promise<DeployConfig> => {
-  const raw = await fs.readFile(deployConfigPath, "utf8");
-  return JSON.parse(raw) as DeployConfig;
-};
+export const readDeployConfig = async (): Promise<DeployConfig> =>
+  (await readDeployConfigYaml()) as DeployConfig;
 
 export const getChainConfig = (config: DeployConfig, chainId: number, label: string) => {
   const chainConfig = config.chains?.[String(chainId)];
@@ -1635,14 +1640,41 @@ export const getChainConfig = (config: DeployConfig, chainId: number, label: str
 };
 
 export const resolveRpcUrl = (chainId: number) => {
+  // Fork overlay (deployConfig.forks.enabled)
+  try {
+    const forks = readDeployConfigSync().forks;
+    if (forks?.enabled) {
+      if (chainId === 7082400 || chainId === 2632500 || chainId === 7082401) {
+        return forks.cotiRpc?.trim() || process.env.COTI_FORK_RPC_URL?.trim() || "http://127.0.0.1:8546";
+      }
+      if (chainId === 1 || chainId === 43114 || chainId === 11155111 || chainId === 43113) {
+        return forks.sourceRpc?.trim() || process.env.SOURCE_FORK_RPC_URL?.trim() || "http://127.0.0.1:8545";
+      }
+    }
+  } catch {
+    // config may be missing in unit-test contexts
+  }
   if (chainId === 7082400) {
     return process.env.COTI_TESTNET_RPC_URL?.trim() || "https://testnet.coti.io/rpc";
+  }
+  if (chainId === 2632500) {
+    return process.env.COTI_MAINNET_RPC_URL?.trim() || "https://mainnet.coti.io/rpc";
   }
   if (chainId === 11155111) {
     return process.env.SEPOLIA_RPC_URL?.trim() || "https://ethereum-sepolia-rpc.publicnode.com";
   }
+  if (chainId === 1) {
+    return process.env.ETHEREUM_RPC_URL?.trim() || process.env.MAINNET_RPC_URL?.trim() || "https://ethereum-rpc.publicnode.com";
+  }
   if (chainId === AVALANCHE_FUJI_CHAIN_ID) {
     return process.env.AVALANCHE_FUJI_RPC_URL?.trim() || "https://avalanche-fuji-c-chain-rpc.publicnode.com";
+  }
+  if (chainId === 43114) {
+    return (
+      process.env.AVALANCHE_RPC_URL?.trim() ||
+      process.env.AVALANCHE_MAINNET_RPC_URL?.trim() ||
+      "https://avalanche-c-chain-rpc.publicnode.com"
+    );
   }
   if (process.env.RPC_URL) {
     return process.env.RPC_URL;

@@ -71,6 +71,17 @@ export default defineConfig({
         },
       },
     },
+    2632500: {
+      name: "COTI Mainnet",
+      chainType: "generic",
+      blockExplorers: {
+        blockscout: {
+          name: "COTI Mainnet Blockscout",
+          url: "https://mainnet.cotiscan.io",
+          apiUrl: "https://mainnet.cotiscan.io/api",
+        },
+      },
+    },
     7082401: {
       name: "simCoti",
       chainType: "generic",
@@ -82,8 +93,17 @@ export default defineConfig({
         etherscan: {
           name: "Snowscan (Fuji)",
           url: "https://testnet.snowscan.xyz",
-          // Etherscan V2 multichain endpoint; `chainid=43113` routes to Snowscan
-          // (Etherscan's Avalanche deployment). Uses the single ETHERSCAN_API_KEY.
+          apiUrl: "https://api.etherscan.io/v2/api",
+        },
+      },
+    },
+    43114: {
+      name: "Avalanche C-Chain",
+      chainType: "l1",
+      blockExplorers: {
+        etherscan: {
+          name: "Snowscan",
+          url: "https://snowscan.xyz",
           apiUrl: "https://api.etherscan.io/v2/api",
         },
       },
@@ -166,6 +186,48 @@ export default defineConfig({
         process.env.AVALANCHE_FUJI_RPC_URL ??
         "https://avalanche-fuji-c-chain-rpc.publicnode.com",
       accounts: [privateKeyFor("AVALANCHE_FUJI_PRIVATE_KEY")],
+    },
+    ethereum: {
+      type: "http",
+      chainType: "l1",
+      chainId: 1,
+      url:
+        process.env.ETHEREUM_RPC_URL ??
+        process.env.MAINNET_RPC_URL ??
+        "https://ethereum-rpc.publicnode.com",
+      accounts: [privateKeyFor("ETHEREUM_PRIVATE_KEY")],
+    },
+    avalanche: {
+      type: "http",
+      chainType: "l1",
+      chainId: 43114,
+      url:
+        process.env.AVALANCHE_RPC_URL ??
+        process.env.AVALANCHE_MAINNET_RPC_URL ??
+        "https://avalanche-c-chain-rpc.publicnode.com",
+      accounts: [privateKeyFor("AVALANCHE_PRIVATE_KEY")],
+    },
+    cotiMainnet: {
+      type: "http",
+      chainType: "l1",
+      chainId: 2632500,
+      url: process.env.COTI_MAINNET_RPC_URL ?? "https://mainnet.coti.io/rpc",
+      accounts: cotiTestnetAccounts(),
+    },
+    // Local Anvil / fork endpoints (see `npm run fork:cli`)
+    forkSource: {
+      type: "http",
+      chainType: "l1",
+      chainId: parseInt(process.env.SOURCE_FORK_CHAIN_ID || "43114"),
+      url: process.env.SOURCE_FORK_RPC_URL ?? "http://127.0.0.1:8545",
+      accounts: cotiTestnetAccounts(),
+    },
+    forkCoti: {
+      type: "http",
+      chainType: "l1",
+      chainId: parseInt(process.env.COTI_FORK_CHAIN_ID || "2632500"),
+      url: process.env.COTI_FORK_RPC_URL ?? "http://127.0.0.1:8546",
+      accounts: cotiTestnetAccounts(),
     },
     // Chain 1 for multichain message passing testing
     // Use in-process simulation to avoid external nodes in tests

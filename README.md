@@ -38,6 +38,7 @@ Open [`pod-ecosystem.code-workspace`](./pod-ecosystem.code-workspace) for multi-
 |---------|-------------|
 | `npm run test:erc7984` | ERC-7984 compat (local) |
 | `npm run test:pp-system` | Privacy Portal system (`PP_SYSTEM_TESTS=1`) |
+| `npm run test:pp-mainnet-smoke` | Read-only mainnet config + optional code checks |
 | `npm run test:pod-token` | pToken cross-chain (`POD_TOKEN_SYSTEM_TESTS=1`) |
 | `npm run test:executor-coti` | COTI MPC executor |
 
@@ -45,12 +46,20 @@ Inbox-only tests live in **coti-pod-inbox-contracts** (`test:inbox-events`, `tes
 
 ## Deploy
 
-Configuration: `deployConfig.json`, `PrivacyPortalConfig.json`.
+Configuration (YAML):
+
+- `deployConfig.testnet.yaml` — default (`DEPLOY_CONFIG` unset)
+- `deployConfig.mainnet.yaml` — Ethereum + Avalanche + COTI mainnet
+
+Mainnet guides: [`docs/mainnet/`](./docs/mainnet/).
 
 ```bash
 npm run deploy:cli
-npm run verify:deployments:config   # fees / oracles / wiring dump
-npm run verify:deployments          # + MpcAdder.add round-trips (Sepolia/Fuji ↔ COTI)
+DEPLOY_CONFIG=deployConfig.mainnet.yaml npm run deploy:cli
+npm run fork:cli -- setup --source avalanche --coti mainnet
+npm run deploy:cli:pack                 # → dist/deploy-cli.js
+npm run verify:deployments:config       # fees / oracles / wiring dump
+npm run verify:deployments              # + MpcAdder.add round-trips
 ```
 
 Inbox deploy scripts: run from **coti-pod-inbox-contracts** (`deploy:inbox`, `relay`).
