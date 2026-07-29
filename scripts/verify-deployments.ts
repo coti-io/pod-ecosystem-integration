@@ -1,5 +1,5 @@
 /**
- * Deployment verification from `deployConfig.json`.
+ * Deployment verification from deploy config YAML (`DEPLOY_CONFIG` / default testnet).
  *
  * 1. Prints inbox fee templates, gas-price bounds, oracle USD legs, and wiring for each deployed chain.
  * 2. Warns when on-chain roles differ from central `deployConfig.roles` (same intent on every chain).

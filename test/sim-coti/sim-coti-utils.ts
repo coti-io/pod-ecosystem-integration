@@ -70,10 +70,20 @@ export function resolveSimCotiNetworkMode(): SimCotiNetworkMode {
 
 /**
  * Connect Hardhat (Sepolia surrogate) + COTI side for integration tests.
- * Uses simCoti when `COTI_BACKEND=sim`, live testnet otherwise.
- * Injects the fake MPC precompile when sim.
+ * - `COTI_BACKEND=sim` → in-process / node simCoti
+ * - `COTI_BACKEND=fork` → Hardhat networks `forkSource` + `forkCoti` (see `npm run fork:cli`)
+ * - otherwise → live cotiTestnet (or cotiMainnet if COTI_NETWORK=cotiMainnet)
  */
 export async function connectDualChainForTests(): Promise<SimCotiNetworks> {
+  const backend = (process.env.COTI_BACKEND ?? "").trim().toLowerCase();
+  if (backend === "fork") {
+    const sourceNet = process.env.SOURCE_FORK_NETWORK?.trim() || "forkSource";
+    const cotiNet = process.env.COTI_FORK_NETWORK?.trim() || "forkCoti";
+    console.log(`[connectDualChainForTests] *** FORKED *** source=${sourceNet} coti=${cotiNet}`);
+    const { viem: sepoliaViem } = await network.connect({ network: sourceNet });
+    const { viem: cotiViem } = await network.connect({ network: cotiNet });
+    return { mode: "node", sepoliaViem, cotiViem };
+  }
   if (isSimCotiBackend()) {
     const nets = await startSimCotiNetworks();
     await initSimCoti(nets.cotiViem);

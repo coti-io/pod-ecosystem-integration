@@ -1,6 +1,4 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { network } from "hardhat";
 import {
   appendDeploymentLog,
@@ -16,12 +14,12 @@ import {
   readDeployConfig,
   requireEnv,
 } from "./deploy-utils.js";
+import { writeDeployConfig } from "./deploy-config.js";
 
 /** Source network (Hardhat network name). Defaults to Sepolia; set to `avalancheFuji` for the AVAX<->COTI pair. */
 const SOURCE_NETWORK = process.env.SOURCE_NETWORK ?? "sepolia";
 const COTI_NETWORK = process.env.COTI_NETWORK ?? "cotiTestnet";
 const ONLY_MPC_ADDER = process.env.ONLY_MPC_ADDER === "true";
-const deployConfigPath = path.resolve(process.cwd(), "deployConfig.json");
 
 const runHardhat = (args: string[]) =>
   new Promise<void>((resolve, reject) => {
@@ -296,8 +294,8 @@ const main = async () => {
   cotiChainConfig.inbox = cotiInbox.address;
   cotiChainConfig.cotiExecutor = cotiExecutor.address;
   cotiChainConfig.priceOracle = cotiPriceOracle.address;
-  await fs.writeFile(deployConfigPath, `${JSON.stringify(deployConfig, null, 2)}\n`, "utf8");
-  console.log("[deploy-full-testnet] Updated deployConfig.json");
+  await writeDeployConfig(deployConfig);
+  console.log("[deploy-full-testnet] Updated deploy config YAML");
 
   await verifyContract(SOURCE_NETWORK, "Inbox", sourceInbox.address, []);
   await verifyContract(

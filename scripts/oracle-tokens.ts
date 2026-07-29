@@ -1,3 +1,11 @@
+/**
+ * Inbox / portal native token legs per chain.
+ *
+ * Prefer `oracle.legs` from the active deploy config YAML.
+ * Falls back to well-known test/local mappings for Hardhat / sim ids.
+ */
+import { readDeployConfigSync } from "./deploy-config.js";
+
 /** Sentinel token address for COTI native USD pricing (manual peg only on most chains). */
 export const ORACLE_REMOTE_COTI_TOKEN = "0x000000000000000000000000000000000000C071" as const;
 
@@ -10,19 +18,54 @@ export type OracleTokenLegs = {
   portalNative: `0x${string}`;
 };
 
+const isAddr = (v: unknown): v is `0x${string}` =>
+  typeof v === "string" && /^0x[0-9a-fA-F]{40}$/.test(v);
+
+const FALLBACK_LEGS: Record<number, OracleTokenLegs> = {
+  11155111: { localToken: SEPOLIA_WETH, remoteToken: ORACLE_REMOTE_COTI_TOKEN, portalNative: SEPOLIA_WETH },
+  31337: { localToken: SEPOLIA_WETH, remoteToken: ORACLE_REMOTE_COTI_TOKEN, portalNative: SEPOLIA_WETH },
+  43113: { localToken: FUJI_WAVAX, remoteToken: ORACLE_REMOTE_COTI_TOKEN, portalNative: FUJI_WAVAX },
+  7082400: {
+    localToken: ORACLE_REMOTE_COTI_TOKEN,
+    remoteToken: SEPOLIA_WETH,
+    portalNative: ORACLE_REMOTE_COTI_TOKEN,
+  },
+  7082401: {
+    localToken: ORACLE_REMOTE_COTI_TOKEN,
+    remoteToken: SEPOLIA_WETH,
+    portalNative: ORACLE_REMOTE_COTI_TOKEN,
+  },
+};
+
 /** Inbox leg + portal native token addresses per chain. */
 export const oracleTokensForChain = (chainId: number): OracleTokenLegs => {
+  try {
+    const chain = readDeployConfigSync().chains?.[String(chainId)];
+    const legs = chain?.oracle?.legs;
+    if (legs && isAddr(legs.localToken) && isAddr(legs.remoteToken) && isAddr(legs.portalNative)) {
+      return {
+        localToken: legs.localToken,
+        remoteToken: legs.remoteToken,
+        portalNative: legs.portalNative,
+      };
+    }
+  } catch {
+    // ignore missing config in unit tests
+  }
+
+  // Hardhat e2e retry aliases (313370000+) that isolate COTI inbound nonces.
+  if (chainId >= 313_370_000) {
+    return FALLBACK_LEGS[31337];
+  }
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
   const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "7082401");
-  // Hardhat surrogate (31337) or e2e retry aliases (313370000+) that isolate COTI inbound nonces.
-  if (chainId === 11155111 || chainId === 31337 || chainId >= 313_370_000) {
-    return { localToken: SEPOLIA_WETH, remoteToken: ORACLE_REMOTE_COTI_TOKEN, portalNative: SEPOLIA_WETH };
-  }
-  if (chainId === 43113) {
-    return { localToken: FUJI_WAVAX, remoteToken: ORACLE_REMOTE_COTI_TOKEN, portalNative: FUJI_WAVAX };
-  }
-  if (chainId === cotiTestnetId || chainId === simCotiId) {
-    return { localToken: ORACLE_REMOTE_COTI_TOKEN, remoteToken: SEPOLIA_WETH, portalNative: ORACLE_REMOTE_COTI_TOKEN };
-  }
-  throw new Error(`Unsupported chainId ${chainId} for oracle token addresses`);
+  if (chainId === cotiTestnetId) return FALLBACK_LEGS[7082400];
+  if (chainId === simCotiId) return FALLBACK_LEGS[7082401];
+
+  const fallback = FALLBACK_LEGS[chainId];
+  if (fallback) return fallback;
+
+  throw new Error(
+    `Unsupported chainId ${chainId} for oracle token addresses — set chains.${chainId}.oracle.legs in deploy config`
+  );
 };

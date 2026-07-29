@@ -10,10 +10,10 @@
  *   ERC7984_WITHDRAW_AMOUNT=0.01     (token units, default 0.01 for WETH / scaled for others)
  */
 
-import { readFileSync } from "node:fs";
 import { network } from "hardhat";
 import { defineChain, parseEther, parseSignature, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { readDeployConfigSync } from "../deploy-config.js";
 import {
   normalizePrivateKey,
   onboardUser,
@@ -104,7 +104,7 @@ const blockscoutSepoliaTxUrl = (hash: string) => `https://eth-sepolia.blockscout
 const blockscoutSepoliaTokenUrl = (addr: string) => `https://eth-sepolia.blockscout.com/token/${addr}`;
 
 function loadDeployConfig(): DeployConfig {
-  return JSON.parse(readFileSync("deployConfig.json", "utf8")) as DeployConfig;
+  return readDeployConfigSync() as DeployConfig;
 }
 
 function parseTokenAmount(raw: string | undefined, decimals: number, fallback: string): bigint {

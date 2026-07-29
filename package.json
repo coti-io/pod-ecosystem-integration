@@ -13,6 +13,8 @@
     "deploy:full-testnet": "hardhat run scripts/deploy-full-testnet.ts",
     "deploy:full-testnet:avax": "SOURCE_NETWORK=avalancheFuji hardhat run scripts/deploy-full-testnet.ts",
     "deploy:cli": "npm run link:contracts && hardhat compile && node --import tsx scripts/deploy-cli.ts",
+    "deploy:cli:pack": "node scripts/pack-deploy-cli.mjs",
+    "fork:cli": "node --import tsx scripts/fork-cli.ts",
     "deploy:mpc-executor": "hardhat run scripts/deploy-mpc-executor.ts",
     "deploy:examples:source": "hardhat run scripts/deploy-examples-source.ts",
     "deploy:examples:coti": "hardhat run scripts/deploy-examples-coti.ts",
@@ -30,6 +32,7 @@
     "investigate:offboard-to-user": "OFFBOARD_TO_USER_INVESTIGATION=1 hardhat test test/tokens/offboard-to-user-investigation.ts",
     "test:pp-system": "COTI_BACKEND=sim PP_SYSTEM_TESTS=1 hardhat test test/privacy/privacy-portal-system.ts",
     "test:pp-remount": "COTI_BACKEND=sim PP_REMOUNT_SYSTEM_TESTS=1 hardhat test test/privacy/privacy-portal-remount-system.ts",
+    "test:pp-mainnet-smoke": "DEPLOY_CONFIG=deployConfig.mainnet.yaml PP_MAINNET_SMOKE=1 hardhat test test/privacy/privacy-portal-mainnet-smoke.ts",
     "test:oracle-sepolia-live": "hardhat test test/privacy/oracle-sepolia-live-prices.ts",
     "test:erc7984": "hardhat test test/erc7984/erc7984-compat.ts test/erc7984/portal-wrapper.ts test/erc7984/dummy-sync-flow.ts",
     "test:erc7984-explorer": "ERC7984_EXPLORER_TESTS=1 hardhat test test/erc7984/blockscout-explorer.ts",
@@ -46,6 +49,7 @@
     "@nomicfoundation/hardhat-toolbox-viem": "^5.0.1",
     "@types/node": "^22.19.5",
     "dotenv": "^17.4.2",
+    "esbuild": "^0.28.1",
     "ethers": "^6.15.0",
     "forge-std": "github:foundry-rs/forge-std#v1.9.4",
     "hardhat": "^3.1.3",
@@ -56,6 +60,7 @@
     "viem": "^2.44.1"
   },
   "dependencies": {
-    "@openzeppelin/contracts": "^5.4.0"
+    "@openzeppelin/contracts": "^5.4.0",
+    "yaml": "^2.9.0"
   }
 }
