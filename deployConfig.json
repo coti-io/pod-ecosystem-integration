@@ -11,6 +11,7 @@
   "roles": {
     "owner": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
     "miners": [
+      "0x075445b969E2a39E096Dd1FBE9A323ae3353fB76",
       "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae"
     ],
     "priceAdmin": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
@@ -182,9 +183,9 @@
         }
       },
       "mpcAdder": "0x8b7d9e70477aabe68500b72acb7f367993edde39",
-      "portalImplementation": "0xf7f7472394868e7e32bddbbd2bd66994a40f047b",
-      "podTokenImplementation": "0xa7e4838327317f4ce6cc8b5ab07a57fdba842c77",
-      "privacyPortalFactory": "0x0e6b35da5aa3e3aeb6f98471821d5b16552efced",
+      "portalImplementation": "0xf4fb32758e41c1b465049c5c967a6604b6c28dce",
+      "podTokenImplementation": "0x1c0b982e084451e0b272cddcce902b04c679317d",
+      "privacyPortalFactory": "0xaf9327277cb370d536d2c8a9e15a0a7ff6c42c15",
       "privacyPortalFactoryConstructor": {
         "feeRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
         "rescueRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
@@ -203,23 +204,23 @@
         }
       },
       "privacyPortalTokens": {
-        "pMTT": {
+        "p.MTT": {
           "underlying": "0x328e70e1c52662cd5f19f824fcb8b463d77a6686",
-          "portal": "0x397b1DE4EbAaC2e522B583120C29ff97F011c84c",
-          "pToken": "0x7BE9Cd10b51eFf6FFCE8f620EA17f6C4dc37a379",
-          "motherRegistrationRequestId": "0x000000000000a86900000000006c11a00000000000000000000000000000007d"
+          "portal": "0x758a8F9a216A95773DDf6F73004B85d59f224518",
+          "pToken": "0x02f284a1968160E1d3e4bC2BA3261be49725E765",
+          "motherRegistrationRequestId": "0x000000000000a86900000000006c11a0000000000000000000000000000000ff"
         },
-        "pUSDC": {
+        "p.USDC": {
           "underlying": "0x5425890298aed601595a70AB815c96711a31Bc65",
-          "portal": "0xa15aBf3BBf23795F7F6d018D592B448F3af1A2e5",
-          "pToken": "0x01635605900E3200679079BD35AF0BefF25e2072",
-          "motherRegistrationRequestId": "0x000000000000a86900000000006c11a00000000000000000000000000000007e"
+          "portal": "0xE75373ADb4AD1A5634a10f4644822943830b18c5",
+          "pToken": "0x21576D8CCE47d044C5815bd59eca1F6DA94c65A5",
+          "motherRegistrationRequestId": "0x000000000000a86900000000006c11a000000000000000000000000000000100"
         },
-        "pWAVAX": {
+        "p.WAVAX": {
           "underlying": "0xd00ae08403B9bbb9124bB305C09058E32C39A48c",
-          "portal": "0x1A775D5a9d034f27dB1328B446088E93BC1bF9EE",
-          "pToken": "0x5910f4f38660A7932485a6De854e9895E6d78D85",
-          "motherRegistrationRequestId": "0x000000000000a86900000000006c11a00000000000000000000000000000007f"
+          "portal": "0xe6932f6Ab846bf389f7ef355dd5830594623B8E5",
+          "pToken": "0x74d47cD68203066c97BA99787Fe1e0c68Ce42b04",
+          "motherRegistrationRequestId": "0x000000000000a86900000000006c11a000000000000000000000000000000101"
         }
       },
       "privatePayrollCoti": "0x81aa3b52ffcbb62bc4391008ceeb0965c0de8640",
@@ -327,9 +328,9 @@
         }
       },
       "mpcAdder": "0xacc74e07db35fb740509fc82228e631f4f08441c",
-      "portalImplementation": "0xd22f4182d57637dd6f125ae8464a82f5647023cd",
-      "podTokenImplementation": "0xe8e2fdd23ea2d5f9bb4632d11f7267602a059e5d",
-      "privacyPortalFactory": "0x6bffca5073e83cde03438cca60feed6e49582044",
+      "portalImplementation": "0x9f4607850ebff3e364bea998816b13f7a59933fb",
+      "podTokenImplementation": "0x3d6510ad5b4139f4fc2f8e94ab9d740e1b9f72ad",
+      "privacyPortalFactory": "0x11a27bdf2b2c251609d78d5c9b53b3c2d71d663c",
       "privacyPortalFactoryConstructor": {
         "feeRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
         "rescueRecipient": "0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae",
@@ -348,23 +349,23 @@
         }
       },
       "privacyPortalTokens": {
-        "pMTT": {
+        "p.MTT": {
           "underlying": "0xd3f5c63f4D87D2235b295FbA83351d31d0eD1BeE",
-          "portal": "0x3af63ceb47E47CD9742F0Cf9C715c5A1c778d548",
-          "pToken": "0xbf5971D4791EaC5c727eE23a613E5f755ED7dE37",
-          "motherRegistrationRequestId": "0x0000000000aa36a700000000006c11a000000000000000000000000000000008"
+          "portal": "0x7e1fecDBC7393A7165Ae7f5F1c56baA4D12c6fc0",
+          "pToken": "0x0510F0b32828D5fB472dE5A5bE30b370c5D1a056",
+          "motherRegistrationRequestId": "0x0000000000aa36a700000000006c11a000000000000000000000000000000013"
         },
-        "pUSDC": {
+        "p.USDC": {
           "underlying": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-          "portal": "0xc32F55450db6fD66d0Bf5c875e791803271b6862",
-          "pToken": "0x433e0AFDe6b8a0102a1C93aeEd61aE27794ae484",
-          "motherRegistrationRequestId": "0x0000000000aa36a700000000006c11a000000000000000000000000000000009"
+          "portal": "0x0D02bD729698630c6f9776cDE1C8e5E00146202e",
+          "pToken": "0xD7B3D49F85000489708B7db5B0f1a8693Fc707f3",
+          "motherRegistrationRequestId": "0x0000000000aa36a700000000006c11a000000000000000000000000000000015"
         },
-        "pWETH": {
+        "p.WETH": {
           "underlying": "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9",
-          "portal": "0xc666c0eFA5C5DDb953dF3881bC3C54C770bc59A4",
-          "pToken": "0x00A69024717Ae8D6EA128972a52F969951474279",
-          "motherRegistrationRequestId": "0x0000000000aa36a700000000006c11a00000000000000000000000000000000a"
+          "portal": "0x2C8B9bBeC8604143863c90D02FdF626a7D5a51C5",
+          "pToken": "0xd33A363459c6Ee0C4F8504E380E8D3Aa4F209116",
+          "motherRegistrationRequestId": "0x0000000000aa36a700000000006c11a000000000000000000000000000000014"
         }
       },
       "feeConfig": {

@@ -1,20 +1,20 @@
 /**
- * Run deposit + pToken transfer on live Sepolia (with COTI mining) and print explorer links.
+ * Run portal in → pToken transfer → portal out on live Sepolia (with COTI mining) and print explorer links.
  *
  *   npx hardhat run scripts/erc7984/run-sepolia-demo.ts --network sepolia
  *
  * Optional env:
- *   ERC7984_TOKEN=pMTT|pUSDC|pWETH   (default pWETH — wraps Sepolia ETH via depositNative)
+ *   ERC7984_TOKEN=p.MTT|p.USDC|p.WETH   (default p.WETH — wraps Sepolia ETH via depositNative)
  *   ERC7984_DEPOSIT_AMOUNT=0.05      (token units; decimals allowed for 18-dec tokens, default 0.05)
  *   ERC7984_TRANSFER_AMOUNT=0.02     (token units, default 0.02)
+ *   ERC7984_WITHDRAW_AMOUNT=0.01     (token units, default 0.01 for WETH / scaled for others)
  */
 
 import { readFileSync } from "node:fs";
 import { network } from "hardhat";
-import { defineChain, parseEther, parseUnits } from "viem";
+import { defineChain, parseEther, parseSignature, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
-  logStep,
   normalizePrivateKey,
   onboardUser,
   receiptWaitOptions,
@@ -56,6 +56,9 @@ const MPC_FEE_CALC_CALLBACK_EXEC_GAS = 300000n;
 
 const padPodFeeWei = (x: bigint) => x + x / 20n + 1n;
 
+/** Live inbox quotes can undershoot `_referenceGasPrice` validation — pad total mint/transfer fee. */
+const padLiveInboxTotalFee = (x: bigint) => x * 2n + 1n;
+
 async function estimateLivePodTwoWayFees(
   inbox: {
     read: {
@@ -76,9 +79,11 @@ async function estimateLivePodTwoWayFees(
     MPC_FEE_CALC_CALLBACK_EXEC_GAS,
     gasPrice,
   ]);
+  const callbackFeeWei = padPodFeeWei(callerWei);
+  const rawTotal = padPodFeeWei(targetWei + callerWei);
   return {
-    callbackFeeWei: padPodFeeWei(callerWei),
-    totalValueWei: padPodFeeWei(targetWei + callerWei),
+    callbackFeeWei,
+    totalValueWei: padLiveInboxTotalFee(rawTotal),
     gasPrice,
   };
 }
@@ -110,20 +115,74 @@ function parseTokenAmount(raw: string | undefined, decimals: number, fallback: s
   return BigInt(value) * 10n ** BigInt(decimals);
 }
 
+/** EIP-712 TransferPermit for portal `requestWithdrawWithPermit`. */
+async function signPublicTransferPermit(params: {
+  walletClient: { signTypedData: (args: any) => Promise<`0x${string}`> };
+  pod: { read: { nonces: (a: readonly [`0x${string}`]) => Promise<bigint>; name: () => Promise<string> }; address: `0x${string}` };
+  owner: `0x${string}`;
+  spender: `0x${string}`;
+  to: `0x${string}`;
+  value: bigint;
+  deadline: bigint;
+  chainId: number;
+}): Promise<{ deadline: bigint; v: number; r: `0x${string}`; s: `0x${string}` }> {
+  const nonce = (await params.pod.read.nonces([params.owner])) as bigint;
+  const tokenName = (await params.pod.read.name()) as string;
+  const signature = await params.walletClient.signTypedData({
+    account: params.owner,
+    domain: {
+      name: tokenName,
+      version: "1",
+      chainId: params.chainId,
+      verifyingContract: params.pod.address,
+    },
+    types: {
+      TransferPermit: [
+        { name: "owner", type: "address" },
+        { name: "spender", type: "address" },
+        { name: "to", type: "address" },
+        { name: "value", type: "uint256" },
+        { name: "nonce", type: "uint256" },
+        { name: "deadline", type: "uint256" },
+      ],
+    },
+    primaryType: "TransferPermit",
+    message: {
+      owner: params.owner,
+      spender: params.spender,
+      to: params.to,
+      value: params.value,
+      nonce,
+      deadline: params.deadline,
+    },
+  });
+  const parsed = parseSignature(signature);
+  return {
+    deadline: params.deadline,
+    v: Number(parsed.v),
+    r: parsed.r,
+    s: parsed.s,
+  };
+}
+
 async function main() {
-  const tokenKey = process.env.ERC7984_TOKEN ?? "pWETH";
+  const tokenKey = process.env.ERC7984_TOKEN ?? "p.WETH";
 
   const cfg = loadDeployConfig();
   const sepoliaCfg = cfg.chains[String(SEPOLIA_CHAIN_ID)];
   const cotiCfg = cfg.chains[String(COTI_CHAIN_ID)];
-  if (!sepoliaCfg?.inbox || !sepoliaCfg.privacyPortalTokens?.[tokenKey]) {
+  const portalTokens = sepoliaCfg?.privacyPortalTokens ?? {};
+  const tokenCfg =
+    portalTokens[tokenKey] ??
+    portalTokens[tokenKey.replace(/^p\./, "p")] ??
+    portalTokens[tokenKey.replace(/^p([A-Z])/, "p.$1")];
+  if (!sepoliaCfg?.inbox || !tokenCfg) {
     throw new Error(`Missing Sepolia deploy config for ${tokenKey}`);
   }
   if (!cotiCfg?.inbox || !cotiCfg.cotiMother) {
     throw new Error("Missing COTI deploy config (inbox / cotiMother)");
   }
 
-  const tokenCfg = sepoliaCfg.privacyPortalTokens[tokenKey]!;
   const inboxSepolia = sepoliaCfg.inbox as `0x${string}`;
   const inboxCoti = cotiCfg.inbox as `0x${string}`;
   const cotiMother = cotiCfg.cotiMother as `0x${string}`;
@@ -184,14 +243,38 @@ async function main() {
   });
 
   const decimals = Number(await podContract.read.decimals());
-  const depositDefault = tokenKey === "pUSDC" ? "100" : tokenKey === "pWETH" ? "0.05" : "1000";
-  const transferDefault = tokenKey === "pUSDC" ? "25" : tokenKey === "pWETH" ? "0.02" : "250";
+  const depositDefault =
+    tokenKey === "p.USDC" || tokenKey === "pUSDC" ? "100" : tokenKey === "p.WETH" || tokenKey === "pWETH" ? "0.05" : "1000";
+  const transferDefault =
+    tokenKey === "p.USDC" || tokenKey === "pUSDC" ? "25" : tokenKey === "p.WETH" || tokenKey === "pWETH" ? "0.02" : "250";
+  const withdrawDefault =
+    tokenKey === "p.USDC" || tokenKey === "pUSDC" ? "25" : tokenKey === "p.WETH" || tokenKey === "pWETH" ? "0.01" : "250";
   const depositAmount = parseTokenAmount(process.env.ERC7984_DEPOSIT_AMOUNT, decimals, depositDefault);
   const transferAmount = parseTokenAmount(process.env.ERC7984_TRANSFER_AMOUNT, decimals, transferDefault);
+  const withdrawAmount = parseTokenAmount(process.env.ERC7984_WITHDRAW_AMOUNT, decimals, withdrawDefault);
   const nativeWrapped = (await portalContract.read.nativeWrappedUnderlying()) as boolean;
 
   const podTwoWayFees = await estimateLivePodTwoWayFees(inboxSepoliaContract, sepoliaPublic);
   log("two-way fee estimate (wei)", podTwoWayFees);
+
+  const [depositPortalFee, , depositMintTotalFee, depositMintCallbackFee] =
+    (await portalContract.read.estimateDepositFees([depositAmount])) as readonly [
+      bigint,
+      boolean,
+      bigint,
+      bigint,
+    ];
+  log("deposit fee quote", {
+    portalFee: depositPortalFee.toString(),
+    mintTotalFee: depositMintTotalFee.toString(),
+    mintCallbackFee: depositMintCallbackFee.toString(),
+  });
+
+  // Prefer live portal quotes when present; fall back to inbox two-way estimate for callback padding.
+  const mintTotalFee =
+    depositMintTotalFee > 0n ? depositMintTotalFee : podTwoWayFees.totalValueWei;
+  const mintCallbackFee =
+    depositMintCallbackFee > 0n ? depositMintCallbackFee : podTwoWayFees.callbackFeeWei;
 
   for (const [label, inboxContract, wallet] of [
     ["sepolia", inboxSepoliaContract, sepoliaWalletOwner],
@@ -265,13 +348,14 @@ async function main() {
     log("depositNative / wrap via portal (ETH → pToken)", {
       owner,
       depositAmount: depositAmount.toString(),
-      inboxFee: podTwoWayFees.totalValueWei.toString(),
+      portalFee: depositPortalFee.toString(),
+      mintFee: mintTotalFee.toString(),
     });
     depositHash = await portalContract.write.depositNative(
-      [owner, depositAmount, podTwoWayFees.callbackFeeWei],
+      [owner, depositAmount, depositPortalFee, mintCallbackFee],
       {
         account: owner,
-        value: depositAmount + podTwoWayFees.totalValueWei,
+        value: depositAmount + mintTotalFee + depositPortalFee,
       }
     );
     await sepoliaPublic.waitForTransactionReceipt({ hash: depositHash, ...receiptWaitOptions });
@@ -289,7 +373,7 @@ async function main() {
       if (underlyingOwner && underlyingOwner.toLowerCase() !== owner.toLowerCase()) {
         throw new Error(
           `Insufficient ${tokenKey} underlying (${ownerUnderlying} < ${depositAmount}). ` +
-            `Underlying owner is ${underlyingOwner}; use ERC7984_TOKEN=pWETH or fund underlying first.`
+            `Underlying owner is ${underlyingOwner}; use ERC7984_TOKEN=p.WETH or fund underlying first.`
         );
       }
       const mintHash = await underlyingContract.write.mint([owner, depositAmount - ownerUnderlying], {
@@ -310,10 +394,13 @@ async function main() {
     txs.push({ label: "underlying-approve", chain: "sepolia", hash: approveHash });
 
     log("deposit / wrap via portal", depositAmount.toString());
-    depositHash = await portalContract.write.deposit([owner, depositAmount, podTwoWayFees.callbackFeeWei], {
-      account: owner,
-      value: podTwoWayFees.totalValueWei,
-    });
+    depositHash = await portalContract.write.deposit(
+      [owner, depositAmount, depositPortalFee, mintCallbackFee],
+      {
+        account: owner,
+        value: mintTotalFee + depositPortalFee,
+      }
+    );
     await sepoliaPublic.waitForTransactionReceipt({ hash: depositHash, ...receiptWaitOptions });
     txs.push({ label: "portal-deposit", chain: "sepolia", hash: depositHash });
   }
@@ -364,6 +451,77 @@ async function main() {
     callbackBlockscout: blockscoutSepoliaTxUrl(transferRound.sepoliaRelayTxHash),
   });
 
+  const [withdrawPortalFee, , withdrawTransferTotalFee, withdrawTransferCallbackFee] =
+    (await portalContract.read.estimateWithdrawFees([withdrawAmount])) as readonly [
+      bigint,
+      boolean,
+      bigint,
+      bigint,
+    ];
+  const transferTotalFee =
+    withdrawTransferTotalFee > 0n ? withdrawTransferTotalFee : podTwoWayFees.totalValueWei;
+  const transferCallbackFee =
+    withdrawTransferCallbackFee > 0n ? withdrawTransferCallbackFee : podTwoWayFees.callbackFeeWei;
+  log("withdraw fee quote", {
+    portalFee: withdrawPortalFee.toString(),
+    transferTotalFee: transferTotalFee.toString(),
+    transferCallbackFee: transferCallbackFee.toString(),
+    withdrawAmount: withdrawAmount.toString(),
+  });
+
+  const permitDeadline = BigInt(Math.floor(Date.now() / 1000) + 86_400);
+  const permit = await signPublicTransferPermit({
+    walletClient: sepoliaWalletOwner,
+    pod: podContract,
+    owner,
+    spender: portal,
+    to: portal,
+    value: withdrawAmount,
+    deadline: permitDeadline,
+    chainId: SEPOLIA_CHAIN_ID,
+  });
+
+  log("requestWithdrawWithPermit (portal out)", {
+    recipient: owner,
+    withdrawAmount: withdrawAmount.toString(),
+  });
+  const withdrawHash = await portalContract.write.requestWithdrawWithPermit(
+    [
+      owner,
+      withdrawAmount,
+      withdrawPortalFee,
+      transferTotalFee,
+      transferCallbackFee,
+      permit.deadline,
+      permit.v,
+      permit.r,
+      permit.s,
+    ],
+    {
+      account: owner,
+      value: transferTotalFee + withdrawPortalFee,
+    }
+  );
+  await sepoliaPublic.waitForTransactionReceipt({ hash: withdrawHash, ...receiptWaitOptions });
+  txs.push({ label: "portal-withdraw-request", chain: "sepolia", hash: withdrawHash });
+  log("portal withdraw tx", {
+    hash: withdrawHash,
+    etherscan: sepoliaTxUrl(withdrawHash),
+    blockscout: blockscoutSepoliaTxUrl(withdrawHash),
+  });
+
+  log("mine withdraw transfer callback (pToken → portal → release underlying)");
+  const withdrawRound = await runCrossChainTwoWayRoundTrip(base, "withdrawXfer", {
+    gas: getDefaultCotiMineGasPodToken(),
+  });
+  txs.push({ label: "withdraw-callback", chain: "sepolia", hash: withdrawRound.sepoliaRelayTxHash });
+  log("withdraw round-trip", {
+    cotiMine: withdrawRound.cotiIncomingRequestId,
+    sepoliaCallback: withdrawRound.sepoliaRelayTxHash,
+    callbackEtherscan: sepoliaTxUrl(withdrawRound.sepoliaRelayTxHash),
+    callbackBlockscout: blockscoutSepoliaTxUrl(withdrawRound.sepoliaRelayTxHash),
+  });
+
   const supports7984 = await podContract.read.supportsInterface(["0x4958f2a4"]).catch(() => false);
 
   console.log("\n========== ERC-7984 Sepolia demo summary ==========");
@@ -386,6 +544,8 @@ async function main() {
   console.log(`  Mint callback:      ${mintRound.sepoliaRelayTxHash}`);
   console.log(`  Transfer submit:    ${transferSubmitHash}`);
   console.log(`  Transfer callback:  ${transferRound.sepoliaRelayTxHash}`);
+  console.log(`  Withdraw request:   ${withdrawHash}`);
+  console.log(`  Withdraw callback:  ${withdrawRound.sepoliaRelayTxHash}`);
   console.log("===================================================\n");
 }
 

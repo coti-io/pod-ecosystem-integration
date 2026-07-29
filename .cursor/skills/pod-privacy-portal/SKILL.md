@@ -37,20 +37,29 @@ For details, read these files in this skill folder:
 
 ## Current Deployment Snapshot
 
-From `PrivacyPortalConfig.json` at the time this skill was authored:
+**Source of truth:** repo-root [`deployConfig.json`](../../../deployConfig.json)
+(`chains.11155111` / `chains.43113` → `privacyPortalFactory`, `privacyPortalTokens`).
+Do not treat this skill snapshot as authoritative if SoT differs.
 
-- UI network: Sepolia / ETH side, chain id `11155111`
-- Source inbox: `0xfa158f9e49c8bb77f971c3630ebcd23a8a88d14e`
-- `PrivacyPortalFactory`: `0xe4f056d3d8fb84b99318fad1caa3bb45c8f172b3`
+Sepolia (`11155111`) example keys use dotted `p.*` symbols:
 
-Token `pMTT`:
+- Shared inbox: `0x3b8B70819f27e0438cBcE7f31894f799da52648F` (`pod.inbox.v2.2`)
+- `PrivacyPortalFactory`: `0x11a27bdf2b2c251609d78d5c9b53b3c2d71d663c`
+
+Token `p.MTT`:
 
 - Underlying ERC20: `0xd3f5c63f4D87D2235b295FbA83351d31d0eD1BeE`
-- `PrivacyPortal`: `0x4640B682cC603883422EBC7122a19aDaa9A0f4A8`
-- PoD pToken: `0x30527Dd1382052a0bD348FAB72940ccD85088AA3`
+- `PrivacyPortal`: `0x7e1fecDBC7393A7165Ae7f5F1c56baA4D12c6fc0`
+- PoD pToken: `0x0510F0b32828D5fB472dE5A5bE30b370c5D1a056`
 - Decimals: `18`
 
-If a UI project has a newer config, prefer the app-local config over this snapshot.
+Token `p.WETH` (native wrap via `depositNative`):
+
+- Underlying WETH: `0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9`
+- `PrivacyPortal`: `0x2C8B9bBeC8604143863c90D02FdF626a7D5a51C5`
+- PoD pToken: `0xd33A363459c6Ee0C4F8504E380E8D3Aa4F209116`
+
+If a UI project has a newer config, prefer the app-local / SoT config over this snapshot.
 
 ## UX Rules
 
