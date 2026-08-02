@@ -187,15 +187,18 @@ export default defineConfig({
       accounts: cotiTestnetAccounts(),
     },
     // In-process simCoti (fake MPC precompile). Used when COTI_BACKEND=sim.
+    // Default 2632500 = sim-coti-mainnet; override SIM_COTI_CHAIN_ID for testnet/legacy.
     simCoti: {
       type: "edr-simulated",
-      chainId: parseInt(process.env.SIM_COTI_CHAIN_ID || "7082401"),
+      chainId: parseInt(process.env.SIM_COTI_CHAIN_ID || "2632500"),
       accounts: hardhatTestAccounts().length > 0 ? hardhatTestAccounts() : undefined,
     },
     localSimCoti: {
       type: "http",
       chainType: "l1",
-      chainId: parseInt(process.env.SIM_COTI_CHAIN_ID || "7082401"),
+      chainId: parseInt(
+        process.env.SIM_COTI_CHAIN_ID || process.env.COTI_FORK_CHAIN_ID || "2632500"
+      ),
       url: process.env.SIM_COTI_RPC_URL ?? FORK_RPC.coti ?? "http://127.0.0.1:8546",
       accounts: cotiTestnetAccounts(),
     },
@@ -257,7 +260,9 @@ export default defineConfig({
     forkCoti: {
       type: "http",
       chainType: "l1",
-      chainId: parseInt(process.env.COTI_FORK_CHAIN_ID || process.env.SIM_COTI_CHAIN_ID || "7082401"),
+      chainId: parseInt(
+        process.env.COTI_FORK_CHAIN_ID || process.env.SIM_COTI_CHAIN_ID || "2632500"
+      ),
       url: process.env.COTI_FORK_RPC_URL ?? process.env.SIM_COTI_RPC_URL ?? FORK_RPC.coti ?? "http://127.0.0.1:8546",
       accounts: cotiTestnetAccounts(),
     },

@@ -71,18 +71,24 @@ export const isMainnetSourceChain = (chainId: number): boolean =>
 
 export const COTI_TESTNET_CHAIN_ID = 7082400;
 export const COTI_MAINNET_CHAIN_ID = 2632500;
-/** sim-coti-node runtime chain id (local dry-run COTI — not an Anvil fork). */
-export const SIM_COTI_CHAIN_ID = 7082401;
+/**
+ * Default local dry-run COTI runtime id (sim-coti-mainnet).
+ * Override with `SIM_COTI_CHAIN_ID` (e.g. `7082400` for sim-coti-testnet).
+ */
+export const SIM_COTI_CHAIN_ID = Number(process.env.SIM_COTI_CHAIN_ID || "2632500");
+/** Legacy sim-only chain id (pre sim-coti-mainnet / sim-coti-testnet profiles). */
+export const SIM_COTI_LEGACY_CHAIN_ID = 7082401;
 
 export const pairedCotiChainIdNumber = (sourceChainId: number): number =>
   isMainnetSourceChain(sourceChainId) ? COTI_MAINNET_CHAIN_ID : COTI_TESTNET_CHAIN_ID;
 
 /**
  * Map runtime chain id → deployConfig SoT key.
- * When forks.enabled, sim-coti (7082401) aliases the COTI slot in the active YAML.
+ * Legacy sim (7082401) aliases the COTI slot in the active YAML when forks.enabled.
+ * sim-coti-mainnet / sim-coti-testnet already report SoT ids (2632500 / 7082400).
  */
 export const soTChainId = (runtimeChainId: number, cfg?: DeployConfig): number => {
-  if (runtimeChainId !== SIM_COTI_CHAIN_ID || !forksEnabled(cfg)) {
+  if (runtimeChainId !== SIM_COTI_LEGACY_CHAIN_ID || !forksEnabled(cfg)) {
     return runtimeChainId;
   }
   try {
@@ -92,7 +98,7 @@ export const soTChainId = (runtimeChainId: number, cfg?: DeployConfig): number =
   } catch {
     // ignore
   }
-  return COTI_TESTNET_CHAIN_ID;
+  return COTI_MAINNET_CHAIN_ID;
 };
 
 export const chainEntry = (cfg: DeployConfig, chainId: number | string): Record<string, any> => {

@@ -2,8 +2,8 @@
  * Fork dry-run version of `mpc-executor-coti.ts`.
  *
  * Targets **sim-coti** from `npm run fork:cli -- setup` (default `http://127.0.0.1:8546`,
- * chain `7082401`, MPC precompile `@0x64`). No `.env` / deployConfig required — uses
- * Hardhat account #0 (pre-funded by sim-coti).
+ * sim-coti-mainnet chain `2632500`, MPC precompile `@0x64`). No `.env` / deployConfig
+ * required — uses Hardhat account #0 (pre-funded by sim-coti).
  *
  * Prerequisites: Anvil source is optional for this suite; **sim-coti must be up**:
  *   cd pod-ecosystem-integration
@@ -28,7 +28,8 @@ const HH_ACCOUNT0_PK =
   "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
 
 const DEFAULT_SIM_RPC = "http://127.0.0.1:8546";
-const EXPECTED_CHAIN_ID = 7082401;
+/** sim-coti-mainnet (default), sim-coti-testnet, or legacy sim profile. */
+const ACCEPTED_SIM_CHAIN_IDS = new Set([2632500, 7082400, 7082401]);
 const MPC_PRECOMPILE = "0x0000000000000000000000000000000000000064" as const;
 
 const GAS_MPC_MUL256 = process.env.MPC_COTI_MUL256_GAS?.trim()
@@ -61,10 +62,12 @@ const probeSimCotiFork = async (): Promise<ProbeOk | ProbeFail> => {
   try {
     const chainHex = (await rpcJson(rpc, "eth_chainId")) as string;
     const chainId = Number.parseInt(chainHex, 16);
-    if (chainId !== EXPECTED_CHAIN_ID) {
+    if (!ACCEPTED_SIM_CHAIN_IDS.has(chainId)) {
       return {
         ok: false,
-        reason: `${rpc} chainId=${chainId} (want ${EXPECTED_CHAIN_ID} sim-coti). Run: npm run fork:cli -- setup`,
+        reason:
+          `${rpc} chainId=${chainId} (want sim-coti 2632500/7082400/7082401). ` +
+          `Run: npm run fork:cli -- setup --coti mainnet`,
       };
     }
     const code = (await rpcJson(rpc, "eth_getCode", [MPC_PRECOMPILE, "latest"])) as string;

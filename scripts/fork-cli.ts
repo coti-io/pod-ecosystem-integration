@@ -1,8 +1,9 @@
 /**
  * Fork / dry-run setup CLI — Anvil (source) + sim-coti (COTI).
  *
- * COTI uses **sim-coti-node** (chain 7082401) with:
+ * COTI uses **sim-coti-node** with:
  *   - Hardhat EDR tip-fork of live COTI by default (Band StdRef + CreateX state)
+ *   - runtime eth_chainId matches SoT (`--coti mainnet` → 2632500, `testnet` → 7082400)
  *   - default upstream: https://mainnet-archivenode-01.coti.io/rpc (archive)
  *   - pin tip-8; CreateX/Band also hardhat_setCode'd so pin aging is less painful
  *   - fake MPC precompile injected @ 0x64
@@ -26,6 +27,7 @@
  *   export AVALANCHE_RPC_URL=http://127.0.0.1:8545   # or ETHEREUM_RPC_URL
  *   export SIM_COTI_RPC_URL=http://127.0.0.1:8546
  *   export COTI_FORK_RPC_URL=http://127.0.0.1:8546
+ *   export COTI_FORK_CHAIN_ID=2632500   # matches --coti mainnet
  *   export COTI_FORK_NETWORK=localSimCoti
  *   DEPLOY_CLI_NETWORK=avalanche npm run deploy:cli
  *   DEPLOY_CLI_NETWORK=localSimCoti npm run deploy:cli   # COTI side (not cotiMainnet)
@@ -38,7 +40,6 @@ import { createRequire } from "node:module";
 import { parse as parseYaml } from "yaml";
 
 const PID_FILE = path.resolve(process.cwd(), ".fork-cli.pids.json");
-const SIM_COTI_CHAIN_ID = 7082401;
 /** MPC precompile address — non-empty code means inject finished. */
 const MPC_PRECOMPILE = "0x0000000000000000000000000000000000000064";
 const CREATEX_ADDRESS = "0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed";
@@ -79,21 +80,29 @@ const SOURCE_PRESETS: Record<string, { chainId: number; rpcEnv: string; defaultR
   },
 };
 
-/** Which deployConfig COTI slot sim aliases + upstream RPC to Hardhat-fork. */
+/** Which deployConfig COTI slot + sim profile / upstream RPC to Hardhat-fork. */
 const COTI_PRESETS: Record<
   string,
-  { soTChainId: number; label: string; rpcEnv: string; defaultRpc: string }
+  {
+    soTChainId: number;
+    profile: "mainnet" | "testnet";
+    label: string;
+    rpcEnv: string;
+    defaultRpc: string;
+  }
 > = {
   mainnet: {
     soTChainId: 2632500,
-    label: "simCoti EDR-fork COTI Mainnet tip + MPC inject",
+    profile: "mainnet",
+    label: "sim-coti-mainnet EDR-fork COTI Mainnet tip + MPC inject",
     rpcEnv: "COTI_MAINNET_RPC_URL",
     // Archive RPC — public mainnet.coti.io prunes ~128 blocks (Hardhat fork dies).
     defaultRpc: "https://mainnet-archivenode-01.coti.io/rpc",
   },
   testnet: {
     soTChainId: 7082400,
-    label: "simCoti EDR-fork COTI Testnet tip + MPC inject",
+    profile: "testnet",
+    label: "sim-coti-testnet EDR-fork COTI Testnet tip + MPC inject",
     rpcEnv: "COTI_TESTNET_RPC_URL",
     defaultRpc: "https://testnet.coti.io/rpc",
   },
@@ -236,17 +245,34 @@ const startAnvil = (params: {
   return child;
 };
 
-/** Start sim-coti-node (blank or EDR-fork) then inject MPC @ 0x64. Chain 7082401. */
+/**
+ * Start sim-coti-node (blank or EDR-fork) then inject MPC @ 0x64.
+ * Runtime eth_chainId matches SoT (`mainnet`→2632500, `testnet`→7082400).
+ */
 const startSimCoti = (params: {
   port: number;
   label: string;
+  /** sim-coti profile: mainnet | testnet | sim (legacy 7082401). */
+  profile: "mainnet" | "testnet" | "sim";
+  chainId: number;
   /** When set, Hardhat EDR-forks this URL (pin block for pruned public RPCs). */
   edrForkUrl?: string;
   edrForkBlock?: number;
 }): ChildProcess => {
   const { bin, cwd } = resolveSimCotiBin();
-  const args = [bin, "start", "--port", String(params.port)];
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const args = [
+    bin,
+    "start",
+    "--port",
+    String(params.port),
+    "--profile",
+    params.profile,
+  ];
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    SIM_COTI_PROFILE: params.profile,
+    SIM_COTI_CHAIN_ID: String(params.chainId),
+  };
   if (params.edrForkUrl) {
     args.push("--fork-url", params.edrForkUrl);
     env.COTI_FORK_URL = params.edrForkUrl;
@@ -268,7 +294,7 @@ const startSimCoti = (params: {
     console.log(`[fork-cli] Starting sim-coti on :${params.port} (blank + CreateX seed + MPC inject)`);
   }
   console.log(`[fork-cli]   bin=${bin}`);
-  console.log(`[fork-cli]   chain-id=${SIM_COTI_CHAIN_ID}`);
+  console.log(`[fork-cli]   profile=${params.profile} chain-id=${params.chainId}`);
   const child = spawn(process.execPath, args, {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
@@ -502,7 +528,9 @@ const printOverlay = (
   console.log("            Upstream default: https://mainnet-archivenode-01.coti.io/rpc");
   console.log("            Override: COTI_ARCHIVE_RPC_URL / COTI_FORK_URL");
   console.log("            Opt out: COTI_EDR_FORK=0 or --blank-coti (CreateX seed only).");
-  console.log(`sim-coti chain id ${SIM_COTI_CHAIN_ID} aliases deployConfig chains.${soTCotiChainId}`);
+  console.log(
+    `sim-coti eth_chainId ${soTCotiChainId} matches deployConfig chains.${soTCotiChainId}`
+  );
   console.log("");
   console.log("Fork overlay for deployConfig.*.yaml:");
   console.log("");
@@ -518,7 +546,8 @@ const printOverlay = (
   console.log(`  export SOURCE_FORK_RPC_URL=http://127.0.0.1:${sourcePort}`);
   console.log(`  export COTI_FORK_RPC_URL=http://127.0.0.1:${cotiPort}`);
   console.log(`  export SOURCE_FORK_CHAIN_ID=${sourceChainId}`);
-  console.log(`  export COTI_FORK_CHAIN_ID=${SIM_COTI_CHAIN_ID}`);
+  console.log(`  export COTI_FORK_CHAIN_ID=${soTCotiChainId}`);
+  console.log(`  export SIM_COTI_CHAIN_ID=${soTCotiChainId}`);
   console.log("  export COTI_FORK_NETWORK=localSimCoti");
   console.log("  export DEPLOY_CONFIG=deployConfig.mainnet.yaml");
   console.log("  # Source: DEPLOY_CLI_NETWORK=avalanche|ethereum npm run deploy:cli");
@@ -597,6 +626,8 @@ const cmdSetup = async (argv: string[]) => {
   const cotiProc = startSimCoti({
     port: cotiPort,
     label: coti.label,
+    profile: coti.profile,
+    chainId: coti.soTChainId,
     edrForkUrl: wantEdrFork ? cotiUpstreamRpc : undefined,
     edrForkBlock,
   });
@@ -633,7 +664,7 @@ const cmdSetup = async (argv: string[]) => {
     coti: {
       pid: cotiProc.pid!,
       port: cotiPort,
-      chainId: SIM_COTI_CHAIN_ID,
+      chainId: coti.soTChainId,
       label: coti.label,
       kind: "sim-coti",
     },

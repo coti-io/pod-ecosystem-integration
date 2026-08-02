@@ -132,6 +132,7 @@ export const resolveCotiTestnetPrivateKey = async (rpcUrl?: string): Promise<str
 
   // Dual-chain sim uses Hardhat-unlocked accounts on both networks. Never pick a live
   // COTI EOA here — `getWalletClient` on the AVAX surrogate would fail with Unknown account.
+  // Fork (`COTI_BACKEND=fork`) keeps funded test keys from env (unlocked on forkSource/localSimCoti).
   const backend = (process.env.COTI_BACKEND ?? "").trim().toLowerCase();
   if (backend === "sim" || backend === "simcoti") {
     const hardhatPk =
@@ -286,6 +287,22 @@ export async function estimateGas(inbox: any): Promise<PodTwoWayFeeEstimate> {
     callbackFeeWei: padPodFeeWei(callerWei),
     totalValueWei: padPodFeeWei(targetWei + callerWei),
   };
+}
+
+/**
+ * One-way `sendOneWayMessage` `msg.value` from the inbox oracle + remote min-fee template.
+ * Hard-coded wei (e.g. 2.5e12) is fine on ETH/sim but underpays on Avalanche forks where
+ * AVAX/COTI FX yields far fewer remote gas units per local wei (`TargetFeeTooLow`).
+ */
+export async function estimateOneWayFeeWei(inbox: any): Promise<bigint> {
+  const [targetWei] = await inbox.read.calculateTwoWayFeeRequiredInLocalToken([
+    MPC_FEE_CALC_CALL_SIZE,
+    0n,
+    MPC_FEE_CALC_REMOTE_EXEC_GAS,
+    0n,
+    BigInt(MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI),
+  ]);
+  return padPodFeeWei(targetWei);
 }
 
 /**
@@ -460,10 +477,16 @@ export const onboardUser = async (privateKey: string, rpcUrl: string, onboardAdd
     return cached;
   }
 
-  // simCoti: deterministic AES — never call live AccountOnboard / coti-ethers recover.
-  if (isSimCotiBackend()) {
+  // sim / fork(sim-coti): deterministic AES — never call live AccountOnboard / coti-ethers recover.
+  const backend = (process.env.COTI_BACKEND ?? "").trim().toLowerCase();
+  if (isSimCotiBackend() || backend === "fork") {
     const pk = normalizePrivateKey(privateKey) as Hex;
-    const key = deriveSimAesKey(pk, SIM_COTI_CHAIN_ID);
+    const chainId = Number(
+      process.env.SIM_COTI_CHAIN_ID?.trim() ||
+        process.env.COTI_FORK_CHAIN_ID?.trim() ||
+        String(SIM_COTI_CHAIN_ID)
+    );
+    const key = deriveSimAesKey(pk, chainId);
     aesKeyCache.set(cacheId, key);
     process.env.COTI_AES_KEY = key;
     process.env.COTI_AES_KEY_FOR_PRIVATE_KEY = privateKeyId;
@@ -1107,29 +1130,50 @@ export const setupContext = async (params: {
   /** Defaults to `MpcAdder`; use `MpcAdderPausable` for retry/pause system tests. */
   podAdderContractName?: "MpcAdder" | "MpcAdderPausable";
 }): Promise<TestContext> => {
-  const simBackend = ["sim", "simcoti"].includes((process.env.COTI_BACKEND ?? "").trim().toLowerCase());
-  const cotiRpcUrl = simBackend
-    ? process.env.SIM_COTI_RPC_URL || process.env.COTI_TESTNET_RPC_URL || "http://127.0.0.1:8546"
+  const backend = (process.env.COTI_BACKEND ?? "").trim().toLowerCase();
+  const simBackend = backend === "sim" || backend === "simcoti";
+  /** Anvil source + sim-coti (fake MPC) — same crypto path as sim, RPC chain id may be mainnet/testnet. */
+  const forkBackend = backend === "fork";
+  const localSimBackend = simBackend || forkBackend;
+
+  const cotiRpcUrl = localSimBackend
+    ? process.env.SIM_COTI_RPC_URL ||
+      process.env.COTI_FORK_RPC_URL ||
+      process.env.COTI_TESTNET_RPC_URL ||
+      "http://127.0.0.1:8546"
     : requireEnv("COTI_TESTNET_RPC_URL");
   const cotiPrivateKeyMain = normalizePrivateKey(await resolveCotiTestnetPrivateKey(cotiRpcUrl));
 
-  const sepoliaChainId = parseInt(process.env.HARDHAT_CHAIN_ID || "31337");
-  // simCoti Hardhat network uses 7082401; live testnet is 7082400.
-  const cotiChainId = BigInt(
-    parseInt(
-      simBackend
-        ? process.env.SIM_COTI_CHAIN_ID || "7082401"
-        : process.env.COTI_TESTNET_CHAIN_ID || "7082400",
-      10
-    )
-  );
+  // Prefer live RPC eth_chainId so sim-coti-mainnet (2632500) / testnet (7082400) match wallets.
+  const probedCotiChainId = localSimBackend
+    ? await (async () => {
+        const fromEnv =
+          process.env.SIM_COTI_CHAIN_ID?.trim() || process.env.COTI_FORK_CHAIN_ID?.trim();
+        if (fromEnv && Number.isFinite(Number(fromEnv))) return Number(fromEnv);
+        try {
+          const res = await fetch(cotiRpcUrl, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+            signal: AbortSignal.timeout(5_000),
+          });
+          const json = (await res.json()) as { result?: string };
+          if (json.result) return Number.parseInt(json.result, 16);
+        } catch {
+          // fall through
+        }
+        return 2632500;
+      })()
+    : parseInt(process.env.COTI_TESTNET_CHAIN_ID || "7082400", 10);
+  const cotiChainId = BigInt(probedCotiChainId);
+
   const cotiDeploymentsPath =
     process.env.COTI_DEPLOYMENTS_PATH || path.resolve(process.cwd(), "deployments", "coti-testnet.json");
 
   logStep("Preparing chain clients");
   const cotiChain = defineChain({
     id: Number(cotiChainId),
-    name: simBackend ? "simCoti" : "COTI Testnet",
+    name: localSimBackend ? "simCoti" : "COTI Testnet",
     nativeCurrency: { name: "COTI", symbol: "COTI", decimals: 18 },
     rpcUrls: {
       default: { http: [cotiRpcUrl] },
@@ -1137,11 +1181,19 @@ export const setupContext = async (params: {
   });
 
   const sepoliaPublicClient = await params.sepoliaViem.getPublicClient();
+  // forkSource may be Avalanche/Ethereum tip — do not assume Hardhat 31337.
+  const sepoliaChainId = forkBackend
+    ? await sepoliaPublicClient.getChainId()
+    : parseInt(process.env.HARDHAT_CHAIN_ID || "31337", 10);
   const cotiPublicClient = await params.cotiViem.getPublicClient({ chain: cotiChain });
   const [sepoliaWallet] = await params.sepoliaViem.getWalletClients();
   const cotiAccount = privateKeyToAccount(cotiPrivateKeyMain as `0x${string}`);
   const hardhatCotiWallet = await params.sepoliaViem.getWalletClient(cotiAccount.address);
   const cotiWallet = await params.cotiViem.getWalletClient(cotiAccount.address, { chain: cotiChain });
+  logStep(
+    `chain ids: source=${sepoliaChainId} coti=${Number(cotiChainId)}` +
+      (forkBackend ? " (fork/sim-coti)" : simBackend ? " (sim)" : " (live)")
+  );
 
   const inboxSepoliaAddress = envOrEmpty("HARDHAT_INBOX_ADDRESS") || envOrEmpty("SEPOLIA_INBOX_ADDRESS");
   const mpcAdderAddress =
@@ -1284,11 +1336,16 @@ export const setupContext = async (params: {
     logStep("Sepolia miner already configured");
   }
 
+  // Pin env so onboardUser / AES derivation match the probed runtime chain id.
+  if (localSimBackend) {
+    process.env.SIM_COTI_CHAIN_ID = String(cotiChainId);
+  }
   const cotiPrivateKey = await resolveCotiTestnetPrivateKey(cotiRpcUrl);
   const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
   const userKey = await onboardUser(cotiPrivateKey, cotiRpcUrl, onboardAddress);
   let cotiEncryptWallet: CotiWallet | SimWallet;
-  if (simBackend) {
+  if (localSimBackend) {
+    // sim + fork both use fake MPC @ 0x64.
     const { registerUserOnSim } = await import("../sim-coti/sim-coti-utils.js");
     const cotiAccountForSim = privateKeyToAccount(normalizePrivateKey(cotiPrivateKey) as `0x${string}`);
     await registerUserOnSim(params.cotiViem, cotiAccountForSim.address, userKey, cotiAccountForSim);

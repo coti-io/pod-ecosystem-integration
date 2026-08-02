@@ -475,12 +475,18 @@ export type OracleUsdLegs = { localUsd18: bigint; remoteUsd18: bigint };
 /** @deprecated Use {@link oracleUsdPricesForChain} */
 export type OracleLegs = OracleUsdLegs;
 
-/** Live COTI testnet (7082400), mainnet (2632500), or in-process / local simCoti (7082401). */
+/** Live COTI testnet/mainnet, or local sim-coti (mainnet/testnet/legacy ids). */
 const isCotiFamilyChainId = (chainId: number): boolean => {
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
   const cotiMainnetId = Number(process.env.COTI_MAINNET_CHAIN_ID || "2632500");
-  const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "7082401");
-  return chainId === cotiTestnetId || chainId === cotiMainnetId || chainId === simCotiId;
+  const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "2632500");
+  const legacySimId = 7082401;
+  return (
+    chainId === cotiTestnetId ||
+    chainId === cotiMainnetId ||
+    chainId === simCotiId ||
+    chainId === legacySimId
+  );
 };
 
 /**
@@ -493,7 +499,7 @@ export const oracleUsdPricesForChain = (chainId: number): OracleUsdLegs => {
   const coti = usdPerWholeToken18(TESTNET_COTI_USD);
   const avax = usdPerWholeToken18(TESTNET_AVAX_USD);
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
-  const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "7082401");
+  const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "2632500");
   // Ethereum mainnet / Sepolia / local Hardhat
   if (chainId === 1 || chainId === 11155111 || chainId === 31337 || chainId >= 313_370_000) {
     return { localUsd18: eth, remoteUsd18: coti };

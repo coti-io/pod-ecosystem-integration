@@ -9,6 +9,7 @@ import {
   buildEncryptedInput256,
   decodeCtUint256,
   decryptUint256,
+  estimateOneWayFeeWei,
   fundContractForInboxFees,
   getLatestRequest,
   getResponseRequestBySource,
@@ -256,8 +257,19 @@ export async function setupPodTokenTestContext(params: {
   return { base, pod, podAsCoti, podAsBob, podCotiMother, owner, bob };
 }
 
-/** Native wei for `sendOneWayMessage` registration (matches `PrivacyPortalFactory.createPortal` default). */
+/**
+ * Fallback native wei for one-way registration on cheap ETH/sim legs.
+ * Prefer {@link estimateOneWayRegistrationFeeWei} — Avalanche forks need oracle-priced fees.
+ */
 export const POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI = 2_500_000_000_000n;
+
+/** Oracle-priced one-way fee (with floor for ETH/sim). */
+export async function estimateOneWayRegistrationFeeWei(inbox: any): Promise<bigint> {
+  const estimated = await estimateOneWayFeeWei(inbox);
+  return estimated > POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI
+    ? estimated
+    : POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI;
+}
 
 /** Registers a source-chain pToken namespace on the COTI mother via a mined one-way inbox message. */
 export async function registerPodTokenOnMother(params: {
@@ -287,6 +299,7 @@ export async function registerPodTokenOnMother(params: {
     args: [pTokenAddress, name, symbol, decimals],
   });
 
+  const value = await estimateOneWayRegistrationFeeWei(base.contracts.inboxSepolia);
   const hash = await base.contracts.inboxSepolia.write.sendOneWayMessage(
     [
       base.chainIds.coti,
@@ -301,12 +314,20 @@ export async function registerPodTokenOnMother(params: {
     ],
     {
       account: registrar,
-      value: POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI,
+      value,
       // eth_estimateGas simulates without msg.value; inbox rejects TotalFeeTooLow(0) during estimation.
       gas: 800_000n,
     }
   );
-  await base.sepolia.publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
+  const receipt = await base.sepolia.publicClient.waitForTransactionReceipt({
+    hash,
+    ...receiptWaitOptions,
+  });
+  if (receipt.status !== "success") {
+    throw new Error(
+      `registerPodTokenOnMother: sendOneWayMessage reverted (tx ${hash}, value=${value})`
+    );
+  }
 
   const outboundRequest = await getLatestRequest(base.contracts.inboxSepolia, base.chainIds.coti);
   await mineRequest(

@@ -18,7 +18,7 @@ import { oracleTokensForChain } from "../../scripts/oracle-tokens.js";
 import {
   completePodOpRoundTrip,
   getDefaultCotiMineGasPodToken,
-  POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI,
+  estimateOneWayRegistrationFeeWei,
   registerPodTokenOnMother,
   setupBobUser,
   syncPodBalancesRoundTrip,
@@ -51,7 +51,8 @@ export async function registerPortalAesKeyIfSim(
   portalAddress: `0x${string}`,
   cotiPk: string
 ) {
-  if (!["sim", "simcoti"].includes((process.env.COTI_BACKEND ?? "").trim().toLowerCase())) {
+  const backend = (process.env.COTI_BACKEND ?? "").trim().toLowerCase();
+  if (!["sim", "simcoti", "fork"].includes(backend)) {
     return;
   }
   const { registerUserOnSim, deriveUserAesKey } = await import("../sim-coti/sim-coti-utils.js");
@@ -172,11 +173,12 @@ export async function setupPrivacyPortalSystemContext(params: {
     );
 
     ppLog("createPortal (one-way mother registration)");
+    const createValue = await estimateOneWayRegistrationFeeWei(base.contracts.inboxSepolia);
     const createHash = await factory.write.createPortal(
       [underlying.address, "Private TUSD", "pTUSD", 18, false],
       {
         account: owner,
-        value: POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI,
+        value: createValue,
         gas: 5_000_000n,
       }
     );
@@ -234,26 +236,43 @@ export async function setupPrivacyPortalSystemContext(params: {
   }
 
   ppLog("deploy PrivacyPortal clone + PodErc20Mintable (minter = portal)");
-  const { portalNative } = oracleTokensForChain(11155111);
-  const mockFactory = await params.sepoliaViem.deployContract("MockPrivacyPortalFactory", [
-    owner,
-    portalNative,
-  ]);
-  const cloneHelper = await params.sepoliaViem.deployContract("CloneHelper", []);
-  const portalImpl = await params.sepoliaViem.deployContract("PrivacyPortal", []);
-  await cloneHelper.write.clone([portalImpl.address], { account: owner });
+  const { portalNative } = oracleTokensForChain(base.chainIds.sepolia);
+  const mockFactory = await params.sepoliaViem.deployContract(
+    "MockPrivacyPortalFactory",
+    [owner, portalNative],
+    { client }
+  );
+  const cloneHelper = await params.sepoliaViem.deployContract("CloneHelper", [], { client });
+  const portalImpl = await params.sepoliaViem.deployContract("PrivacyPortal", [], { client });
+  const cloneTx = await cloneHelper.write.clone([portalImpl.address], { account: owner });
+  const cloneReceipt = await base.sepolia.publicClient.waitForTransactionReceipt({
+    hash: cloneTx,
+    ...receiptWaitOptions,
+  });
+  if (cloneReceipt.status !== "success") {
+    throw new Error(`CloneHelper.clone reverted (tx ${cloneTx})`);
+  }
   const portalAddress = (await cloneHelper.read.lastClone()) as `0x${string}`;
+  if (!portalAddress || portalAddress === zeroAddress) {
+    throw new Error(`CloneHelper.lastClone returned zero after clone tx ${cloneTx}`);
+  }
   const portal = await params.sepoliaViem.getContractAt("PrivacyPortal", portalAddress, {
     client,
   });
-  const pod = await params.sepoliaViem.deployContract("PodErc20Mintable", [
-    portal.address,
-    base.chainIds.coti,
-    base.contracts.inboxSepolia.address,
-    podCotiMother.address,
-    "Private TUSD",
-    "pTUSD",
-  ]);
+  // Use `portalAddress` (not `portal.address`) — hardhat-viem getContractAt can omit `.address`
+  // when a custom client is passed, which previously encoded minter as address(0).
+  const pod = await params.sepoliaViem.deployContract(
+    "PodErc20Mintable",
+    [
+      portalAddress,
+      base.chainIds.coti,
+      base.contracts.inboxSepolia.address,
+      podCotiMother.address,
+      "Private TUSD",
+      "pTUSD",
+    ],
+    { client }
+  );
 
   await portal.write.initialize([underlying.address, pod.address, 18, false, mockFactory.address], {
     account: owner,

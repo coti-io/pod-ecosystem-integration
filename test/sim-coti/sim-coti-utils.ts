@@ -190,7 +190,11 @@ export async function initSimCoti(
 /** Deterministic sim AES key from a private key and sim chain id. */
 export function deriveUserAesKey(
   privateKey: Hex | string,
-  chainId = SIM_COTI_CHAIN_ID
+  chainId: number = Number(
+    process.env.SIM_COTI_CHAIN_ID?.trim() ||
+      process.env.COTI_FORK_CHAIN_ID?.trim() ||
+      String(SIM_COTI_CHAIN_ID)
+  )
 ): string {
   const pk = (privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`) as Hex;
   return deriveSimAesKey(pk, chainId);
