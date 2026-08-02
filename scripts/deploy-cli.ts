@@ -307,11 +307,17 @@ const maybeTransferOwnable = async (
       outputs: [],
     },
   ] as const;
-  const owner = (await ctx.publicClient.readContract({
-    address,
-    abi: ownableAbi,
-    functionName: "owner",
-  })) as Address;
+  let owner: Address;
+  try {
+    owner = (await ctx.publicClient.readContract({
+      address,
+      abi: ownableAbi,
+      functionName: "owner",
+    })) as Address;
+  } catch {
+    console.warn(`  ${label}: not Ownable (skip transferOwnership)`);
+    return;
+  }
   if (owner.toLowerCase() === desiredOwner.toLowerCase()) return;
   if (owner.toLowerCase() !== ctx.deployer.toLowerCase()) {
     console.warn(`  ${label}: cannot transferOwnership (current owner ${owner})`);
@@ -856,7 +862,13 @@ const TARGETS: Target[] = [
     },
     run: async (ctx) => {
       const chainCfg = chainCfgSync(ctx.chainId);
-      const oracleAddr = asAddress(resolveConsumerOracle(chainCfg, "inbox")!, "inbox oracle");
+      const rawOracle = resolveConsumerOracle(chainCfg, "inbox");
+      if (!rawOracle || !isAddr(rawOracle)) {
+        throw new Error(
+          `inbox oracle missing in deployConfig (chains.${ctx.chainId}.priceOracle / oracle.consumers.inbox). Deploy priceOracle first.`
+        );
+      }
+      const oracleAddr = asAddress(rawOracle, "inbox oracle");
       const inbox = await getInbox(ctx);
       await wireOracleToInbox({
         inbox,
@@ -1103,10 +1115,8 @@ const TARGETS: Target[] = [
     configKey: "cotiExecutor",
     resolveAddress: (_ctx, chainCfg) => chainCfg.cotiExecutor || undefined,
     deploy: async (ctx) => {
-      const roles = chainRoles(ctx);
-      const address = await deploySimple(ctx, "MpcExecutor", [ctx.inboxAddress]);
-      await maybeTransferOwnable(ctx, address, roles.cotiExecutor.owner, "MpcExecutor");
-      return address;
+      // MpcExecutor is InboxUser-only (not Ownable) — do not call maybeTransferOwnable.
+      return deploySimple(ctx, "MpcExecutor", [ctx.inboxAddress]);
     },
     verifyArgs: (ctx) => [ctx.inboxAddress],
   },

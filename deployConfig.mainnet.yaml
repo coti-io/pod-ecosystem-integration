@@ -162,7 +162,7 @@ chains:
       maxGasPriceWei: '0'
     privacyPortalTokens:
       p.USDC:
-        underlying: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9fcd248'
+        underlying: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E'
         pName: Private USDC
         pSymbol: pUSDC
         decimals: 6

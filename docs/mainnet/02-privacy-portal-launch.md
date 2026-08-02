@@ -55,7 +55,7 @@ chains:
   "43114":
     privacyPortalTokens:
       p.USDC:
-        underlying: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9fcd248"
+        underlying: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
         pName: "Private USDC"
         pSymbol: "pUSDC"
         decimals: 6
@@ -100,7 +100,11 @@ Or pick targets interactively — the menu is built from whatever keys exist for
 
 ```bash
 npm run fork:cli -- setup --source avalanche --coti mainnet
-# enable forks in YAML, then deploy against forkSource / forkCoti
+# enable forks in YAML, then point RPCs at fork ports and use real network names:
+export AVALANCHE_RPC_URL=http://127.0.0.1:8545
+export COTI_MAINNET_RPC_URL=http://127.0.0.1:8546
+DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=avalanche npm run deploy:cli
+DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=cotiMainnet npm run deploy:cli
 ```
 
 ## Smoke test (read-only)

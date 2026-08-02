@@ -18,6 +18,7 @@ import {
 import { MANUAL_USD_PEG_18, usdcUnderlyingForChain } from "./privacyPortal/oracle-pegs.js";
 import { canonicalUnderlying } from "./privacyPortal/canonical-collateral.js";
 import {
+  COTI_MAINNET_CHAIN_ID,
   getDeployConfigPath,
   readDeployConfig as readDeployConfigYaml,
   readDeployConfigSync,
@@ -474,16 +475,17 @@ export type OracleUsdLegs = { localUsd18: bigint; remoteUsd18: bigint };
 /** @deprecated Use {@link oracleUsdPricesForChain} */
 export type OracleLegs = OracleUsdLegs;
 
-/** Live COTI testnet (7082400) or in-process simCoti (7082401). */
+/** Live COTI testnet (7082400), COTI mainnet (2632500), or in-process simCoti (7082401). */
 const isCotiFamilyChainId = (chainId: number): boolean => {
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
   const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "7082401");
-  return chainId === cotiTestnetId || chainId === simCotiId;
+  return chainId === cotiTestnetId || chainId === simCotiId || chainId === COTI_MAINNET_CHAIN_ID;
 };
 
 /**
  * Local = this chain's native token; remote = the paired chain's native token.
- * Sepolia / local Hardhat: local ETH, remote COTI. COTI testnet: local COTI, remote ETH.
+ * Source EVM: local ETH/AVAX, remote COTI. COTI: local COTI, remote ETH (default pair quote).
+ * Prefer {@link manualUsdLegsForChain} when deployConfig provides `manualLegs` / spots.
  */
 export const oracleUsdPricesForChain = (chainId: number): OracleUsdLegs => {
   const eth = usdPerWholeToken18(TESTNET_ETH_USD);
@@ -491,19 +493,19 @@ export const oracleUsdPricesForChain = (chainId: number): OracleUsdLegs => {
   const avax = usdPerWholeToken18(TESTNET_AVAX_USD);
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
   const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "7082401");
-  if (chainId === 11155111 || chainId === 31337 || chainId >= 313_370_000) {
+  if (chainId === 1 || chainId === 11155111 || chainId === 31337 || chainId >= 313_370_000) {
     return { localUsd18: eth, remoteUsd18: coti };
   }
-  if (chainId === AVALANCHE_FUJI_CHAIN_ID) {
+  if (chainId === AVALANCHE_FUJI_CHAIN_ID || chainId === 43_114) {
     return { localUsd18: avax, remoteUsd18: coti };
   }
   if (isCotiFamilyChainId(chainId)) {
     return { localUsd18: coti, remoteUsd18: eth };
   }
   throw new Error(
-    `Unsupported chainId ${chainId} for testnet oracle legs. ` +
-      `Use Sepolia (11155111), Avalanche Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
-      `COTI testnet (${cotiTestnetId}), simCoti (${simCotiId}), or local (31337), ` +
+    `Unsupported chainId ${chainId} for oracle USD legs. ` +
+      `Use Sepolia (11155111), Ethereum (1), Avalanche Fuji (${AVALANCHE_FUJI_CHAIN_ID}), Avalanche (43114), ` +
+      `COTI testnet (${cotiTestnetId}), COTI mainnet (${COTI_MAINNET_CHAIN_ID}), simCoti (${simCotiId}), or local (31337), ` +
       `or set COTI_TESTNET_CHAIN_ID / SIM_COTI_CHAIN_ID to match this network.`
   );
 };
@@ -970,28 +972,30 @@ export const usePlainOracleForConfig = (oracleConfig?: OracleConfigJson): boolea
 
 const manualUsdLegsForChain = (chainId: number, oracleConfig?: OracleConfigJson): OracleUsdLegs => {
   const legs = oracleUsdPricesForChain(chainId);
-  const cotiSpot = oracleConfig?.cotiUsdSpot?.trim();
-  if (!cotiSpot) return legs;
-  const coti = usdPerWholeToken18(cotiSpot);
-  if (chainId === 11155111 || chainId === 31337 || chainId === AVALANCHE_FUJI_CHAIN_ID) {
-    return { ...legs, remoteUsd18: coti };
-  }
-  if (isCotiFamilyChainId(chainId)) {
-    return { ...legs, localUsd18: coti };
-  }
-  return legs;
+  const localSpot =
+    oracleConfig?.manualLegs?.localUsdSpot?.trim() || undefined;
+  const remoteSpot =
+    oracleConfig?.manualLegs?.remoteUsdSpot?.trim() ||
+    oracleConfig?.manualLegs?.cotiUsdSpot?.trim() ||
+    oracleConfig?.cotiUsdSpot?.trim() ||
+    undefined;
+  return {
+    localUsd18: localSpot ? usdPerWholeToken18(localSpot) : legs.localUsd18,
+    remoteUsd18: remoteSpot ? usdPerWholeToken18(remoteSpot) : legs.remoteUsd18,
+  };
 };
 
 /**
- * Deploys `PriceOracle` and sets local/remote 18‑decimal USD prices from {@link oracleUsdPricesForChain}
- * (ETH/COTI spot from {@link TESTNET_ETH_USD} / {@link TESTNET_COTI_USD}). Does not touch an inbox.
+ * Deploys `PriceOracle` and sets local/remote 18‑decimal USD prices from
+ * {@link manualUsdLegsForChain} (deployConfig manuals when set, else defaults).
+ * Does not touch an inbox.
  */
 export const deployTestnetPriceOracle = async (params: DeployOracleParams) => {
-  const { viem, publicClient, walletClient, chainId } = params;
+  const { viem, publicClient, walletClient, chainId, oracleConfig } = params;
   const deployer = await resolveDeployerAddress(walletClient);
   const owner = (params.owner ?? deployer) as `0x${string}`;
   const writeOpts = { account: deployer, gas: COTI_ADMIN_WRITE_GAS };
-  const { localUsd18, remoteUsd18 } = oracleUsdPricesForChain(chainId);
+  const { localUsd18, remoteUsd18 } = manualUsdLegsForChain(chainId, oracleConfig);
 
   const oracle = await viem.deployContract("PriceOracle", [owner], {
     client: { public: publicClient, wallet: walletClient },
@@ -1253,10 +1257,9 @@ export const deployPodOracleStack = async (
   const { viem, publicClient, walletClient, chainId, oracleConfig } = params;
   const deployer = await resolveDeployerAddress(walletClient);
   const writeOpts = { account: deployer, gas: COTI_ADMIN_WRITE_GAS };
-  const feeds = chainlinkFeedsForChain(chainId);
-  const { localUsd18, remoteUsd18 } = manualUsdLegsForChain(chainId, oracleConfig);
   const adapterType = oracleAdapterType(oracleConfig);
 
+  // Plain (manual) oracle must not touch Chainlink feed tables — COTI mainnet has no Chainlink mapping.
   if (adapterType === "plain") {
     const plain = await deployTestnetPriceOracle(params);
     return {
@@ -1265,6 +1268,9 @@ export const deployPodOracleStack = async (
       liveAdapterName: "PriceOracle",
     };
   }
+
+  const feeds = chainlinkFeedsForChain(chainId);
+  const { localUsd18, remoteUsd18 } = manualUsdLegsForChain(chainId, oracleConfig);
 
   const { address: liveAdapterAddr, contractName } = await deployLiveOracleAdapter(params);
   const liveAdapter = (await viem.getContractAt(contractName, liveAdapterAddr, {

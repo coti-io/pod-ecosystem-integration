@@ -17,7 +17,10 @@ Dry-run first (optional):
 ```bash
 npm run fork:cli -- setup --source avalanche --coti mainnet
 # set forks.enabled: true in deployConfig.mainnet.yaml
-DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=forkSource npm run deploy:cli
+export AVALANCHE_RPC_URL=http://127.0.0.1:8545
+export COTI_MAINNET_RPC_URL=http://127.0.0.1:8546
+DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=avalanche npm run deploy:cli
+DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=cotiMainnet npm run deploy:cli
 ```
 
 ## Order of operations

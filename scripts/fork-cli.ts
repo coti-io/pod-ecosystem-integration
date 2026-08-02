@@ -14,9 +14,14 @@
  *     cotiRpc: "http://127.0.0.1:8546"
  *     label: "FORKED"
  *
- * Then:
- *   DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=forkSource npm run deploy:cli
- *   (or set Hardhat ethereum/avalanche/cotiMainnet URLs via env to the fork ports)
+ * Then point Hardhat mainnet networks at the fork ports and deploy with real network names:
+ *   export AVALANCHE_RPC_URL=http://127.0.0.1:8545   # or ETHEREUM_RPC_URL
+ *   export COTI_MAINNET_RPC_URL=http://127.0.0.1:8546
+ *   DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=avalanche npm run deploy:cli
+ *   DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=cotiMainnet npm run deploy:cli
+ *
+ * Note: DEPLOY_CLI_NETWORK=forkSource is invalid for deploy-cli (not in DEPLOY_NETWORKS).
+ * Hardhat still exposes forkSource/forkCoti for sim-coti tests — that is a different path.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -142,7 +147,11 @@ const printOverlay = (sourcePort: number, cotiPort: number, sourceChainId: numbe
   console.log(`  export SOURCE_FORK_CHAIN_ID=${sourceChainId}`);
   console.log(`  export COTI_FORK_CHAIN_ID=${cotiChainId}`);
   console.log(`  export DEPLOY_CONFIG=deployConfig.mainnet.yaml`);
-  console.log(`  # Then: DEPLOY_CLI_NETWORK=forkSource npm run deploy:cli`);
+  console.log(`  export AVALANCHE_RPC_URL=http://127.0.0.1:${sourcePort}   # or ETHEREUM_RPC_URL`);
+  console.log(`  export COTI_MAINNET_RPC_URL=http://127.0.0.1:${cotiPort}`);
+  console.log(`  # Then (network names are avalanche|ethereum|cotiMainnet — not forkSource):`);
+  console.log(`  #   DEPLOY_CLI_NETWORK=avalanche DEPLOY_CLI_TARGETS=inbox,priceOracle,... npm run deploy:cli`);
+  console.log(`  #   DEPLOY_CLI_NETWORK=cotiMainnet DEPLOY_CLI_TARGETS=inbox,priceOracle,... npm run deploy:cli`);
   console.log("────────────────────────────────────────────────────────────");
 };
 

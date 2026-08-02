@@ -47,5 +47,8 @@ Interactive banner shows **LIVE / FORKED**, chain id, and deploy wallet — conf
 ```bash
 npm run fork:cli -- setup --source avalanche --coti mainnet
 # set forks.enabled: true in YAML
-DEPLOY_CLI_NETWORK=forkSource node dist/deploy-cli.js
+export AVALANCHE_RPC_URL=http://127.0.0.1:8545
+export COTI_MAINNET_RPC_URL=http://127.0.0.1:8546
+DEPLOY_CLI_NETWORK=avalanche node dist/deploy-cli.js
+DEPLOY_CLI_NETWORK=cotiMainnet node dist/deploy-cli.js
 ```

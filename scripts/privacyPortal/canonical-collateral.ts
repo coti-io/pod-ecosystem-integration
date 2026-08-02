@@ -8,6 +8,8 @@
  * Portal/factory/COTI mother treat these like any other ERC-20 underlying.
  */
 
+import { getAddress } from "viem";
+
 export const CIRCLE_USDC_FAUCET = "https://faucet.circle.com";
 
 /** Fuji C-Chain test AVAX (gas + wrap to WAVAX). */
@@ -31,13 +33,21 @@ export const CANONICAL_UNDERLYING: Record<number, Record<string, `0x${string}`>>
   },
   /** Ethereum mainnet */
   1: {
+    /** Circle native USDC. https://developers.circle.com/stablecoins/usdc-contract-addresses */
     USDC: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    /** Canonical WETH9. */
+    WETH: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
   },
   /** Avalanche C-Chain mainnet */
   43114: {
-    USDC: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9fcd248",
+    /** Circle native USDC (not USDC.e). https://developers.circle.com/stablecoins/usdc-contract-addresses */
+    USDC: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
+    /** Canonical WAVAX (same as wrapped native gas token). */
+    WAVAX: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
   },
 };
 
-export const canonicalUnderlying = (chainId: number, symbol: string): `0x${string}` | undefined =>
-  CANONICAL_UNDERLYING[chainId]?.[symbol];
+export const canonicalUnderlying = (chainId: number, symbol: string): `0x${string}` | undefined => {
+  const raw = CANONICAL_UNDERLYING[chainId]?.[symbol];
+  return raw ? (getAddress(raw) as `0x${string}`) : undefined;
+};
