@@ -45,7 +45,18 @@ Interactive banner shows **LIVE / FORKED**, chain id, and deploy wallet — conf
 ## Fork dry-run on a jump host
 
 ```bash
+# Anvil source + sim-coti Hardhat-fork of COTI tip (do not Anvil-fork COTI)
 npm run fork:cli -- setup --source avalanche --coti mainnet
-# set forks.enabled: true in YAML
-DEPLOY_CLI_NETWORK=forkSource node dist/deploy-cli.js
+# set forks.enabled: true (label: FORKED)
+
+export DEPLOY_CONFIG=deployConfig.mainnet.yaml
+export AVALANCHE_RPC_URL=http://127.0.0.1:8545
+export SIM_COTI_RPC_URL=http://127.0.0.1:8546
+export COTI_FORK_RPC_URL=http://127.0.0.1:8546
+export COTI_FORK_NETWORK=localSimCoti
+
+DEPLOY_CLI_NETWORK=avalanche node dist/deploy-cli.js
+DEPLOY_CLI_NETWORK=localSimCoti node dist/deploy-cli.js
 ```
+
+Confirm the interactive banner shows **FORKED** before any broadcast.

@@ -80,6 +80,7 @@ import {
   forksLabel,
   pairedCotiChainIdNumber,
   pairedCotiNetworkName,
+  soTChainId,
 } from "./deploy-config.js";
 
 // --- CLI flags ---
@@ -99,6 +100,7 @@ const DEPLOY_NETWORKS: { name: string; chainId: number; role: Role; label: strin
   { name: "sepolia", chainId: 11155111, role: "source", label: "Sepolia", group: "testnet" },
   { name: "avalancheFuji", chainId: 43113, role: "source", label: "Avalanche Fuji", group: "testnet" },
   { name: "cotiTestnet", chainId: 7082400, role: "coti", label: "COTI Testnet", group: "testnet" },
+  { name: "localSimCoti", chainId: 7082401, role: "coti", label: "simCoti (local dry-run)", group: "testnet" },
   { name: "ethereum", chainId: 1, role: "source", label: "Ethereum", group: "mainnet" },
   { name: "avalanche", chainId: 43114, role: "source", label: "Avalanche", group: "mainnet" },
   { name: "cotiMainnet", chainId: 2632500, role: "coti", label: "COTI Mainnet", group: "mainnet" },
@@ -155,8 +157,10 @@ const readCfg = async (): Promise<any> => readDeployConfig();
 const readCfgSync = (): any => readDeployConfigSync();
 const writeCfg = async (cfg: any): Promise<void> => writeDeployConfig(cfg);
 const chainEntry = (cfg: any, chainId: number): Record<string, any> => cfgChainEntry(cfg, chainId);
-const chainCfgSync = (chainId: number): Record<string, any> =>
-  readCfgSync().chains?.[String(chainId)] ?? {};
+const chainCfgSync = (chainId: number): Record<string, any> => {
+  const cfg = readCfgSync();
+  return cfg.chains?.[String(soTChainId(chainId, cfg))] ?? {};
+};
 
 /** Print explicit session context: config file, LIVE vs FORKED, wallet, chain. */
 const printSessionBanner = async (ctx: DeployCtx, netLabel: string): Promise<void> => {
@@ -1103,10 +1107,8 @@ const TARGETS: Target[] = [
     configKey: "cotiExecutor",
     resolveAddress: (_ctx, chainCfg) => chainCfg.cotiExecutor || undefined,
     deploy: async (ctx) => {
-      const roles = chainRoles(ctx);
-      const address = await deploySimple(ctx, "MpcExecutor", [ctx.inboxAddress]);
-      await maybeTransferOwnable(ctx, address, roles.cotiExecutor.owner, "MpcExecutor");
-      return address;
+      // MpcExecutor is InboxUser-only (not Ownable) — no ownership transfer.
+      return deploySimple(ctx, "MpcExecutor", [ctx.inboxAddress]);
     },
     verifyArgs: (ctx) => [ctx.inboxAddress],
   },

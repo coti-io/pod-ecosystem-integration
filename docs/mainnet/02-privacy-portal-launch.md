@@ -99,9 +99,24 @@ Or pick targets interactively — the menu is built from whatever keys exist for
 ## Fork dry-run
 
 ```bash
+# Anvil source + sim-coti Hardhat-fork of COTI tip (Anvil COTI fork is not supported)
 npm run fork:cli -- setup --source avalanche --coti mainnet
-# enable forks in YAML, then deploy against forkSource / forkCoti
+# forks.enabled: true; cotiRpc → sim-coti :8546 (forked tip + MPC inject)
+
+export DEPLOY_CONFIG=deployConfig.mainnet.yaml
+export AVALANCHE_RPC_URL=http://127.0.0.1:8545
+export SIM_COTI_RPC_URL=http://127.0.0.1:8546
+export COTI_FORK_NETWORK=localSimCoti
+
+# Source: DEPLOY_CLI_NETWORK=avalanche|ethereum
+# COTI:   DEPLOY_CLI_NETWORK=localSimCoti
 ```
+
+Mother registration waits for off-chain miners. For dry-run, bring up the
+relayer stack from `pod-integration-tests` (`deployment-runner.sh … up`) **before**
+`ppPortal` / mother-reg steps, then use `ppRetryMotherReg` if needed.
+
+See `pod-integration-tests/deployments/builder/MAINNET.md` for the full dry-run order.
 
 ## Smoke test (read-only)
 

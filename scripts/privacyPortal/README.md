@@ -45,7 +45,7 @@ Per-chain oracle settings live under `chains[chainId].oracle` in the deploy YAML
 }
 ```
 
-Set `"adapter": "band"` on a chain to deploy `BandLiveOracle` instead (configure `bandStdRef` and `bandBase`/`bandQuote` in feeds). COTI testnet uses `"adapter": "plain"` (manual legs only).
+Set `"adapter": "band"` on a chain to deploy `BandLiveOracle` instead (configure `bandStdRef` and `bandBase`/`bandQuote` in feeds). COTI mainnet uses Band (`COTI/USD`); COTI testnet often uses `"adapter": "plain"` (manual legs only).
 
 **Choosing the Privacy Portal oracle:** `consumers.privacyPortalFactory` overrides `priceOracle` for the factory constructor and `WireFactoryOracle`. Leave empty to use the deployed `priceOracle`. Set a different address when inbox and portal should use separate `PoDPriceOracle` instances.
 

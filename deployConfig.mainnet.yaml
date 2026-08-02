@@ -1,37 +1,33 @@
-# PoD deploy config — MAINNET (Ethereum, Avalanche C-Chain, COTI mainnet).
-# Select with: DEPLOY_CONFIG=deployConfig.mainnet.yaml
-# CreateX on COTI mainnet: 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed
-# CreateX deploy tx: 0xb6274b80bc7cda162df89894c7748a5cb7ba2eaa6004183c41a1837c3b072f1e
-# No Sablier/payroll addresses.
 forks:
-  enabled: false
-  sourceRpc: http://127.0.0.1:8545
-  cotiRpc: http://127.0.0.1:8546
-  label: LIVE
+  enabled: true
+  sourceRpc: 'http://127.0.0.1:8545'
+  cotiRpc: 'http://127.0.0.1:8546'
+  label: 'FORKED'
 inboxSalt:
-  label: pod.inbox.v2.2
+  label: 'pod.inbox.v2.2'
   deployer: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   salt: '0xdF9F8FcA4591227C092FCBAb45A846C19fb6d1ae001fb9f7e3c0a1d0b8afd4c1'
   guardedSalt: '0xc56d3f92a63cc05db162a4fcaf61a45a2469b9cca77f23db895484b9e8d2fd22'
   address: '0x3b8B70819f27e0438cBcE7f31894f799da52648F'
-  bytecodeNote: CreateX deterministic address depends on Inbox creation bytecode, including Ownable(address(1)) placeholder
-    owner in the constructor. Bump `label` (and clear salt/guardedSalt/address) whenever Inbox bytecode changes before redeploying.
-  runbook: 'After inbox deploy: priceOracle (setInboxTokens → seed prices/feeds → refreshCache) → feeConfig (min-fee templates
-    + gasPriceBounds) → wireInboxOracle. On non-EIP-1559 chains (COTI), gasPriceBounds are required.'
+  bytecodeNote: 'CreateX deterministic address depends on Inbox creation bytecode, including Ownable(address(1))
+    placeholder owner in the constructor. Bump `label` (and clear salt/guardedSalt/address) whenever Inbox bytecode
+    changes before redeploying.'
+  runbook: 'After inbox deploy: priceOracle (setInboxTokens → seed prices/feeds → refreshCache) → feeConfig (min-fee
+    templates + gasPriceBounds) → wireInboxOracle. On non-EIP-1559 chains (COTI), gasPriceBounds are required.'
 roles:
   owner: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   miners:
-  - '0x075445b969E2a39E096Dd1FBE9A323ae3353fB76'
-  - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+    - '0x075445b969E2a39E096Dd1FBE9A323ae3353fB76'
+    - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   priceAdmin: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   operators:
-  - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+    - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   deployers:
-  - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+    - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   feeRecipient: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   rescueRecipient: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
 chains:
-  '1':
+  "1":
     inbox: ''
     portalImplementation: ''
     podTokenImplementation: ''
@@ -39,7 +35,7 @@ chains:
     priceOracle: ''
     mpcAdder: ''
     oracle:
-      adapter: chainlink
+      adapter: 'chainlink'
       maxStaleness: 3600
       fetchInterval: 300
       legs:
@@ -88,33 +84,33 @@ chains:
     privacyPortalTokens:
       p.USDC:
         underlying: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
-        pName: Private USDC
-        pSymbol: pUSDC
+        pName: 'Private USDC'
+        pSymbol: 'p.USDC'
         decimals: 6
-        underlyingKind: canonical
-        underlyingLabel: USDC
-        canonicalKey: USDC
+        underlyingKind: 'canonical'
+        underlyingLabel: 'USDC'
+        canonicalKey: 'USDC'
         portal: ''
         pToken: ''
       p.WETH:
         underlying: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
-        pName: Private WETH
-        pSymbol: pWETH
+        pName: 'Private WETH'
+        pSymbol: 'p.WETH'
         decimals: 18
-        underlyingKind: canonical
-        underlyingLabel: WETH (wrap ETH)
-        canonicalKey: WETH
+        underlyingKind: 'canonical'
+        underlyingLabel: 'WETH (wrap ETH)'
+        canonicalKey: 'WETH'
         portal: ''
         pToken: ''
-  '43114':
+  "43114":
     inbox: ''
-    portalImplementation: ''
-    podTokenImplementation: ''
+    portalImplementation: '0x7727421957650ddff7fec25f52cbab6ec80179a3'
+    podTokenImplementation: '0x479d15bd86e86a21403cefc7da6377b4d3daf993'
     privacyPortalFactory: ''
-    priceOracle: ''
-    mpcAdder: ''
+    priceOracle: '0xd5a9ae2b7ea3ea5065c311ed3f511dc9cfda479b'
+    mpcAdder: '0x41f98bb93fc04beb03d3dd6121cd3de52cdfddd1'
     oracle:
-      adapter: chainlink
+      adapter: 'chainlink'
       maxStaleness: 3600
       fetchInterval: 300
       legs:
@@ -127,13 +123,16 @@ chains:
         inboxRemote: {}
         collateral:
           USDC:
-            pegUsd: '1'
+            chainlink: '0xF096872672F44d6EBA71458D74fe67F9a77a23B9'
+          EUROe:
+            chainlink: '0x192f2DBA961Bb0277520C082d6bfa87D5961333E'
           WAVAX:
             chainlink: '0x0A77230d17318075983913bC2145DB16C7366156'
       manualLegs: {}
       consumers:
         inbox: ''
         privacyPortalFactory: ''
+      liveAdapter: '0xa46641bb240608e6141743f758688d7607afc571'
     feeConfig:
       local:
         constantFee: '0'
@@ -162,47 +161,71 @@ chains:
       maxGasPriceWei: '0'
     privacyPortalTokens:
       p.USDC:
-        underlying: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9fcd248'
-        pName: Private USDC
-        pSymbol: pUSDC
+        underlying: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E'
+        pName: 'Private USDC'
+        pSymbol: 'p.USDC'
         decimals: 6
-        underlyingKind: canonical
-        underlyingLabel: USDC
-        canonicalKey: USDC
+        underlyingKind: 'canonical'
+        underlyingLabel: 'USDC'
+        canonicalKey: 'USDC'
+        portal: ''
+        pToken: ''
+      p.EUROe:
+        underlying: '0x820802Fa8a99901F52e39acD21177b0BE6EE2974'
+        pName: 'Private EUROe'
+        pSymbol: 'p.EUROe'
+        decimals: 6
+        underlyingKind: 'canonical'
+        underlyingLabel: 'EUROe'
+        canonicalKey: 'EUROe'
+        portal: ''
+        pToken: ''
+      p.ALOT:
+        underlying: '0x093783055F9047C2BfF99c4e414501F8A147bC69'
+        pName: 'Private ALOT'
+        pSymbol: 'p.ALOT'
+        decimals: 18
+        underlyingKind: 'canonical'
+        underlyingLabel: 'ALOT'
+        canonicalKey: 'ALOT'
         portal: ''
         pToken: ''
       p.WAVAX:
         underlying: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7'
-        pName: Private WAVAX
-        pSymbol: pWAVAX
+        pName: 'Private WAVAX'
+        pSymbol: 'p.WAVAX'
         decimals: 18
-        underlyingKind: canonical
-        underlyingLabel: WAVAX (wrap AVAX)
-        canonicalKey: WAVAX
+        underlyingKind: 'canonical'
+        underlyingLabel: 'WAVAX (wrap AVAX)'
+        canonicalKey: 'WAVAX'
         portal: ''
         pToken: ''
-  '2632500':
-    inbox: ''
-    cotiExecutor: ''
-    cotiMother: ''
-    priceOracle: ''
+  "2632500":
+    inbox: '0x3b8B70819f27e0438cBcE7f31894f799da52648F'
+    cotiExecutor: '0x3c8acf2833e426b3975bb2964e108c5e9f06e8c4'
+    cotiMother: '0x41f98bb93fc04beb03d3dd6121cd3de52cdfddd1'
+    priceOracle: '0xd5a9ae2b7ea3ea5065c311ed3f511dc9cfda479b'
     oracle:
-      adapter: plain
-      maxStaleness: 86400
+      adapter: 'band'
+      bandStdRef: '0x9503d502435f8e228b874Ba0F792301d4401b523'
+      liveAdapter: '0xa46641bb240608e6141743f758688d7607afc571'
+      maxStaleness: 0
       fetchInterval: 300
       legs:
         localToken: '0x000000000000000000000000000000000000C071'
         remoteToken: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
         portalNative: '0x000000000000000000000000000000000000C071'
       feeds:
-        inboxLocal: {}
-        inboxRemote: {}
+        inboxLocal:
+          bandBase: 'COTI'
+          bandQuote: 'USD'
+        inboxRemote:
+          bandBase: 'ETH'
+          bandQuote: 'USD'
         collateral:
           USDC:
             pegUsd: '1'
-      manualLegs:
-        localUsdSpot: '0.05'
-        remoteUsdSpot: '3000'
+      manualLegs: {}
       consumers:
         inbox: ''
         privacyPortalFactory: ''

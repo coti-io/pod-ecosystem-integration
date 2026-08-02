@@ -1,11 +1,39 @@
 import "dotenv/config";
+import fs from "node:fs";
+import path from "node:path";
 import "@nomicfoundation/hardhat-verify";
 import hardhatToolboxViemPlugin from "@nomicfoundation/hardhat-toolbox-viem";
 import { configVariable, defineConfig } from "hardhat/config";
+import { parse as parseYaml } from "yaml";
 
 const envOrConfig = (key: string) => process.env[key] ?? configVariable(key);
 const privateKeyFor = (key: string) =>
   process.env[key] ?? process.env.PRIVATE_KEY ?? configVariable(key);
+
+/**
+ * When deployConfig forks.enabled, Hardhat `avalanche` / `ethereum` / `localSimCoti`
+ * should hit Anvil + sim-coti — not public RPCs (publicnode archive 403s).
+ * Explicit env vars still win.
+ */
+const forkRpcOverlay = (): { source?: string; coti?: string } => {
+  try {
+    const rawPath = process.env.DEPLOY_CONFIG?.trim() || "deployConfig.testnet.yaml";
+    const filePath = path.isAbsolute(rawPath) ? rawPath : path.resolve(process.cwd(), rawPath);
+    if (!fs.existsSync(filePath)) return {};
+    const cfg = parseYaml(fs.readFileSync(filePath, "utf8")) as {
+      forks?: { enabled?: boolean; sourceRpc?: string; cotiRpc?: string };
+    };
+    if (!cfg.forks?.enabled) return {};
+    return {
+      source: cfg.forks.sourceRpc?.trim() || "http://127.0.0.1:8545",
+      coti: cfg.forks.cotiRpc?.trim() || "http://127.0.0.1:8546",
+    };
+  } catch {
+    return {};
+  }
+};
+const FORK_RPC = forkRpcOverlay();
+
 
 /** COTI testnet: prefer dedicated key, then `_PRIVATE_KEY` (miner / alternate account in `.env`), then `PRIVATE_KEY`. */
 const privateKeyForCotiTestnet = () =>
@@ -168,7 +196,7 @@ export default defineConfig({
       type: "http",
       chainType: "l1",
       chainId: parseInt(process.env.SIM_COTI_CHAIN_ID || "7082401"),
-      url: process.env.SIM_COTI_RPC_URL ?? "http://127.0.0.1:8546",
+      url: process.env.SIM_COTI_RPC_URL ?? FORK_RPC.coti ?? "http://127.0.0.1:8546",
       accounts: cotiTestnetAccounts(),
     },
     localSepolia: {
@@ -194,6 +222,7 @@ export default defineConfig({
       url:
         process.env.ETHEREUM_RPC_URL ??
         process.env.MAINNET_RPC_URL ??
+        FORK_RPC.source ??
         "https://ethereum-rpc.publicnode.com",
       accounts: [privateKeyFor("ETHEREUM_PRIVATE_KEY")],
     },
@@ -204,6 +233,7 @@ export default defineConfig({
       url:
         process.env.AVALANCHE_RPC_URL ??
         process.env.AVALANCHE_MAINNET_RPC_URL ??
+        FORK_RPC.source ??
         "https://avalanche-c-chain-rpc.publicnode.com",
       accounts: [privateKeyFor("AVALANCHE_PRIVATE_KEY")],
     },
@@ -211,22 +241,24 @@ export default defineConfig({
       type: "http",
       chainType: "l1",
       chainId: 2632500,
+      // Dry-run: prefer localSimCoti, not cotiMainnet. Overlay only if env unset and forks on.
       url: process.env.COTI_MAINNET_RPC_URL ?? "https://mainnet.coti.io/rpc",
       accounts: cotiTestnetAccounts(),
     },
-    // Local Anvil / fork endpoints (see `npm run fork:cli`)
+    // Local Anvil source + sim-coti (see `npm run fork:cli`). Do not Anvil-fork COTI.
     forkSource: {
       type: "http",
       chainType: "l1",
       chainId: parseInt(process.env.SOURCE_FORK_CHAIN_ID || "43114"),
-      url: process.env.SOURCE_FORK_RPC_URL ?? "http://127.0.0.1:8545",
+      url: process.env.SOURCE_FORK_RPC_URL ?? FORK_RPC.source ?? "http://127.0.0.1:8545",
       accounts: cotiTestnetAccounts(),
     },
+    // Deprecated alias — prefer localSimCoti. Kept for COTI_BACKEND=fork tests.
     forkCoti: {
       type: "http",
       chainType: "l1",
-      chainId: parseInt(process.env.COTI_FORK_CHAIN_ID || "2632500"),
-      url: process.env.COTI_FORK_RPC_URL ?? "http://127.0.0.1:8546",
+      chainId: parseInt(process.env.COTI_FORK_CHAIN_ID || process.env.SIM_COTI_CHAIN_ID || "7082401"),
+      url: process.env.COTI_FORK_RPC_URL ?? process.env.SIM_COTI_RPC_URL ?? FORK_RPC.coti ?? "http://127.0.0.1:8546",
       accounts: cotiTestnetAccounts(),
     },
     // Chain 1 for multichain message passing testing

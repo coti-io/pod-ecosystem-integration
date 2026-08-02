@@ -4,6 +4,7 @@ import {
   encodeFunctionData,
   getAddress,
   keccak256,
+  sliceHex,
   toHex,
   type Abi,
   type Address,
@@ -82,6 +83,14 @@ export const buildInboxSalt = (deployer: Address, label: string = INBOX_SALT_LAB
 };
 
 /**
+ * CreateX `_PROXY_INITCODE_HASH` (Solady CREATE3 proxy). Used for offline address
+ * precompute when the RPC cannot serve CreateX eth_call (pruned / non-archive forks).
+ * @see https://github.com/pcaversaccio/createx/blob/main/src/CreateX.sol
+ */
+export const CREATEX_PROXY_INITCODE_HASH =
+  "0x21c35dbe1b344a2488cf3321d6ce542f8e9f305544ff09e4993a62319a497c1f" as const;
+
+/**
  * Replicate CreateX `_guard` for the permissioned, no-cross-chain-protection case:
  * `guardedSalt = keccak256(abi.encode(deployer, salt))`. This is what CreateX actually uses as
  * the CREATE3 salt, and it is independent of `block.chainid`.
@@ -94,21 +103,28 @@ export const computeGuardedSalt = (deployer: Address, salt: Hex): Hex =>
     )
   );
 
-/** Precompute the deterministic Inbox address via a read-only `eth_call` (no transaction). */
+/**
+ * Offline CreateX `computeCreate3Address(guardedSalt, CreateX)` — no RPC.
+ * Matches on-chain CreateX pure view (CREATE2 proxy then CREATE nonce=1).
+ */
+export const computeCreate3AddressLocal = (deployer: Address, salt: Hex): Address => {
+  const guardedSalt = computeGuardedSalt(deployer, salt);
+  const proxy = getAddress(
+    sliceHex(
+      keccak256(concatHex(["0xff", CREATEX_ADDRESS, guardedSalt, CREATEX_PROXY_INITCODE_HASH])),
+      12
+    )
+  );
+  // RLP([proxy, 1]) for EOA-less contract CREATE at nonce 1: 0xd6 0x94 || proxy || 0x01
+  return getAddress(sliceHex(keccak256(concatHex(["0xd694", proxy, "0x01"])), 12));
+};
+
+/** Precompute the deterministic Inbox address (offline; no eth_call). */
 export const precomputeCreate3Address = async (
-  publicClient: PublicClient,
+  _publicClient: PublicClient,
   deployer: Address,
   salt: Hex
-): Promise<Address> => {
-  const guardedSalt = computeGuardedSalt(deployer, salt);
-  const computed = await publicClient.readContract({
-    address: CREATEX_ADDRESS,
-    abi: CREATEX_ABI,
-    functionName: "computeCreate3Address",
-    args: [guardedSalt, CREATEX_ADDRESS],
-  });
-  return getAddress(computed);
-};
+): Promise<Address> => computeCreate3AddressLocal(deployer, salt);
 
 /** True if `address` already has deployed bytecode (read-only). */
 export const isContractDeployed = async (

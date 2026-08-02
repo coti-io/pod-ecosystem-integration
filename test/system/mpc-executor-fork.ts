@@ -1,37 +1,36 @@
 /**
- * System test: `MpcExecutorCotiTest` on COTI testnet.
+ * Fork dry-run version of `mpc-executor-coti.ts`.
  *
- * 1. **Direct `MpcCore`**: `mul*PublicPlain` — setPublic → mul/checkedMul → decrypt (no executor, no `respond`).
- * 2. **`MpcExecutor`**: `executorMul*PublicPlain` — proxy calls `mul*FromPlain` on the executor so `onlyInbox` passes and
- *    **`setPublic*` + `mul` run inside `MpcExecutor`** (COTI MPC precompile ties handles to the executing contract). The proxy
- *    stores `respond` bytes; we decrypt to `lastPlain*`.
+ * Targets **sim-coti** from `npm run fork:cli -- setup` (default `http://127.0.0.1:8546`,
+ * chain `7082401`, MPC precompile `@0x64`). No `.env` / deployConfig required — uses
+ * Hardhat account #0 (pre-funded by sim-coti).
  *
- * COTI `decrypt` is not reliable under `eth_call`; use transactions + `read` getters.
+ * Prerequisites: Anvil source is optional for this suite; **sim-coti must be up**:
+ *   cd pod-ecosystem-integration
+ *   npm run fork:cli -- setup --source avalanche --coti mainnet
+ *   npm run test:executor-fork
  *
- * Requires: `COTI_TESTNET_RPC_URL`, and `COTI_TESTNET_PRIVATE_KEY` or `PRIVATE_KEY`.
- *
- * Run: `npm run test:executor-coti`
- *
- * Dry-run against `fork:cli` sim-coti (no env): `npm run test:executor-fork`
- *
- * If COTI RPC returns `contract creation code storage out of gas` or bad `eth_estimateGas` for deploys, set e.g.
- * `MPC_COTI_CONTRACT_DEPLOY_GAS=12000000` (one value used for proxy inbox, executor, and harness deploy txs).
+ * Live testnet suite remains: `npm run test:executor-coti`.
  */
 import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
 import { network } from "hardhat";
-import { defineChain } from "viem";
+import { defineChain, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { receiptWaitOptions } from "./mpc-test-utils.js";
+import { deriveUserAesKey, registerUserOnSim } from "../sim-coti/sim-coti-utils.js";
 
 const MOD_256 = 1n << 256n;
-const cotiReceiptWaitOptions = { ...receiptWaitOptions, timeout: 900_000 };
+const cotiReceiptWaitOptions = { ...receiptWaitOptions, timeout: 300_000 };
 
-/**
- * Some COTI RPCs fail `eth_estimateGas` on heavy `mul256` txs; a modest explicit cap avoids that.
- * Keep limits low enough that `gas * gasPrice` fits typical testnet wallets (very high caps can exceed balance).
- */
-/** COTI `mul256` can exceed 15M gas; override with `MPC_COTI_MUL256_GAS` if needed. */
+/** Hardhat mnemonic account #0 — funded by sim-coti-node. */
+const HH_ACCOUNT0_PK =
+  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
+
+const DEFAULT_SIM_RPC = "http://127.0.0.1:8546";
+const EXPECTED_CHAIN_ID = 7082401;
+const MPC_PRECOMPILE = "0x0000000000000000000000000000000000000064" as const;
+
 const GAS_MPC_MUL256 = process.env.MPC_COTI_MUL256_GAS?.trim()
   ? BigInt(process.env.MPC_COTI_MUL256_GAS.trim())
   : 50_000_000n;
@@ -41,44 +40,82 @@ function mod256Mul(a: bigint, b: bigint): bigint {
   return (a * b) % MOD_256;
 }
 
-const cotiRpc = process.env.COTI_TESTNET_RPC_URL?.trim();
-const cotiPkRaw =
-  process.env.COTI_TESTNET_PRIVATE_KEY?.trim() || process.env.PRIVATE_KEY?.trim();
+type ProbeOk = { ok: true; rpc: string; chainId: number };
+type ProbeFail = { ok: false; reason: string };
 
-const canRunCoti = Boolean(cotiRpc && cotiPkRaw);
+const rpcJson = async (rpc: string, method: string, params: unknown[] = []): Promise<unknown> => {
+  const res = await fetch(rpc, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = (await res.json()) as { result?: unknown; error?: { message?: string } };
+  if (body.error) throw new Error(body.error.message || "rpc error");
+  return body.result;
+};
 
-const deployGasOpt = (() => {
-  const raw = process.env.MPC_COTI_CONTRACT_DEPLOY_GAS?.trim();
-  if (!raw) return {};
-  return { gas: BigInt(raw) };
-})();
-const deployGas = "gas" in deployGasOpt ? deployGasOpt.gas : undefined;
+const probeSimCotiFork = async (): Promise<ProbeOk | ProbeFail> => {
+  const rpc = process.env.SIM_COTI_RPC_URL?.trim() || DEFAULT_SIM_RPC;
+  try {
+    const chainHex = (await rpcJson(rpc, "eth_chainId")) as string;
+    const chainId = Number.parseInt(chainHex, 16);
+    if (chainId !== EXPECTED_CHAIN_ID) {
+      return {
+        ok: false,
+        reason: `${rpc} chainId=${chainId} (want ${EXPECTED_CHAIN_ID} sim-coti). Run: npm run fork:cli -- setup`,
+      };
+    }
+    const code = (await rpcJson(rpc, "eth_getCode", [MPC_PRECOMPILE, "latest"])) as string;
+    if (!code || code === "0x") {
+      return {
+        ok: false,
+        reason: `MPC precompile missing at ${MPC_PRECOMPILE} on ${rpc}. Run: npm run fork:cli -- setup`,
+      };
+    }
+    return { ok: true, rpc, chainId };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `sim-coti not reachable at ${rpc} (${err instanceof Error ? err.message : String(err)}). Run: npm run fork:cli -- setup`,
+    };
+  }
+};
 
-describe("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 }, async function () {
-  if (!canRunCoti) {
-    it.skip(
-      "set COTI_TESTNET_RPC_URL and COTI_TESTNET_PRIVATE_KEY (or PRIVATE_KEY) to run this file",
-      () => {}
-    );
+const probe = await probeSimCotiFork();
+
+describe("MpcExecutorCotiTest (fork / sim-coti)", { concurrency: false, timeout: 600_000 }, async function () {
+  if (!probe.ok) {
+    it.skip(probe.reason, () => {});
     return;
   }
 
-  const { viem } = await network.connect({ network: "cotiTestnet" });
-  const cotiChainId = Number.parseInt(process.env.COTI_TESTNET_CHAIN_ID ?? "7082400", 10);
+  // Pin env so Hardhat `localSimCoti` matches the probed RPC (no deployConfig needed).
+  process.env.SIM_COTI_RPC_URL = probe.rpc;
+  process.env.SIM_COTI_CHAIN_ID = String(probe.chainId);
+
+  const { viem } = await network.connect({ network: "localSimCoti" });
   const cotiChain = defineChain({
-    id: cotiChainId,
-    name: "COTI Testnet",
+    id: probe.chainId,
+    name: "simCoti (fork dry-run)",
     nativeCurrency: { name: "COTI", symbol: "COTI", decimals: 18 },
-    rpcUrls: {
-      default: { http: [cotiRpc!] },
-    },
+    rpcUrls: { default: { http: [probe.rpc] } },
   });
-  const pkHex = (cotiPkRaw!.startsWith("0x") ? cotiPkRaw : `0x${cotiPkRaw}`) as `0x${string}`;
-  const account = privateKeyToAccount(pkHex);
+  const account = privateKeyToAccount(HH_ACCOUNT0_PK);
   const publicClient = await viem.getPublicClient({ chain: cotiChain });
   const wallet = await viem.getWalletClient(account.address, { chain: cotiChain });
 
+  const bal = await publicClient.getBalance({ address: account.address });
+  if (bal === 0n) {
+    it.skip(`Hardhat #0 ${account.address} has 0 balance on sim-coti — re-run fork:cli setup`, () => {});
+    return;
+  }
+
   const deployOpts = { client: { public: publicClient, wallet } } as const;
+  const deployGas = process.env.MPC_COTI_CONTRACT_DEPLOY_GAS?.trim()
+    ? BigInt(process.env.MPC_COTI_CONTRACT_DEPLOY_GAS.trim())
+    : undefined;
 
   let proxyInbox: Awaited<ReturnType<(typeof viem)["deployContract"]>>;
   let harness: Awaited<ReturnType<(typeof viem)["deployContract"]>>;
@@ -102,30 +139,34 @@ describe("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 },
     } as const;
   };
 
-  const syncNonceFromError = (err: unknown): boolean => {
+  const syncNonceFromError = async (err: unknown): Promise<boolean> => {
     const message = err instanceof Error ? err.message : String(err);
     const next = message.match(/next nonce (\d+)/i);
     if (next?.[1]) {
       nextNonce = Number(next[1]);
       return true;
     }
-    if (message.match(/nonce .*lower than the current nonce/i)) {
-      nextNonce = (nextNonce ?? 0) + 1;
+    if (/nonce too high|nonce .*lower than the current nonce|expected nonce to be/i.test(message)) {
+      nextNonce = await publicClient.getTransactionCount({
+        address: account.address,
+        blockTag: "pending",
+      });
       return true;
     }
     return false;
   };
 
-  const withNonceRetry = async <T>(fn: (opts: Awaited<ReturnType<typeof txOpts>>) => Promise<T>, gas?: bigint): Promise<T> => {
+  const withNonceRetry = async <T>(
+    fn: (opts: Awaited<ReturnType<typeof txOpts>>) => Promise<T>,
+    gas?: bigint
+  ): Promise<T> => {
     let lastError: unknown;
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < 6; attempt++) {
       try {
         return await fn(await txOpts(gas));
       } catch (err) {
         lastError = err;
-        if (!syncNonceFromError(err)) {
-          throw err;
-        }
+        if (!(await syncNonceFromError(err))) throw err;
       }
     }
     throw lastError;
@@ -138,7 +179,9 @@ describe("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 },
     }) as const;
 
   before(async function () {
-    // Split deploy: nested `new MpcExecutor` in one tx exceeds typical testnet gas / estimate limits.
+    console.log(
+      `[executor-fork] sim-coti ${probe.rpc} chainId=${probe.chainId} signer=${account.address}`
+    );
     proxyInbox = await withNonceRetry(
       (opts) => viem.deployContract("MpcExecutorCotiProxyInbox", [], { ...deployOpts, ...opts } as any),
       deployGas
@@ -147,20 +190,30 @@ describe("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 },
       (opts) => viem.deployContract("MpcExecutor", [proxyInbox.address], { ...deployOpts, ...opts } as any),
       deployGas
     );
-    const registerHash = await withNonceRetry((opts) => proxyInbox.write.registerExecutor([executor.address], opts));
+    const registerHash = await withNonceRetry((opts) =>
+      proxyInbox.write.registerExecutor([executor.address], opts)
+    );
     await publicClient.waitForTransactionReceipt({ hash: registerHash, ...cotiReceiptWaitOptions });
     harness = await withNonceRetry(
       (opts) =>
-        viem.deployContract(
-          "MpcExecutorCotiTest",
-          [executor.address, proxyInbox.address],
-          { ...deployOpts, ...opts } as any
-        ),
+        viem.deployContract("MpcExecutorCotiTest", [executor.address, proxyInbox.address], {
+          ...deployOpts,
+          ...opts,
+        } as any),
       deployGas
     );
-  }, { timeout: 900_000 });
+    // executorMul* offBoardToUser(cOwner) requires sim AES registration for the harness.
+    const harnessKey = deriveUserAesKey(HH_ACCOUNT0_PK, probe.chainId);
+    await registerUserOnSim(viem, harness.address as `0x${string}`, harnessKey, account);
+    // registerUserOnSim sends a tx outside our nonce tracker — resync.
+    nextNonce = await publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: "pending",
+    });
+    console.log(`[executor-fork] registered sim AES for harness ${harness.address}`);
+  }, { timeout: 600_000 });
 
-  const cOwner = () => harness.address;
+  const cOwner = () => harness.address as Hex;
 
   describe("direct MpcCore (reference)", function () {
     async function runMul256Tx(
@@ -248,8 +301,6 @@ describe("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 },
     });
 
     it("executorMul256PublicPlain matches direct mul256PublicPlain", async function () {
-      // `offBoardToUser` + `respond` can revert on COTI for some edge ciphertexts even when direct
-      // `decrypt(MpcCore.mul(...))` succeeds; keep executor parity checks to stable inputs.
       const pairs: [bigint, bigint][] = [
         [3n, 7n],
         [(1n << 128n) - 1n, (1n << 128n) - 1n],
@@ -274,11 +325,7 @@ describe("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 },
         assert.equal(rExec.status, "success", "executorMul256PublicPlain");
         const viaExec = await harness.read.lastPlain256();
 
-        assert.equal(
-          viaExec,
-          direct,
-          `executor mul256 vs direct for (${a}, ${b})`
-        );
+        assert.equal(viaExec, direct, `executor mul256 vs direct for (${a}, ${b})`);
         assert.equal(direct, mod256Mul(a, b));
       }
     });
@@ -323,7 +370,9 @@ describe("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 },
     it("executor mul64 reverts on overflow (same as direct)", async function () {
       const a = (1n << 63n) - 1n;
       const b = 4n;
-      await assert.rejects(async () => harness.simulate.executorMul64PublicPlain([a, b, cOwner()], simulateOpts() as any));
+      await assert.rejects(async () =>
+        harness.simulate.executorMul64PublicPlain([a, b, cOwner()], simulateOpts() as any)
+      );
     });
   });
 });

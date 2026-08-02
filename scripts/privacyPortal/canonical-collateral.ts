@@ -35,7 +35,14 @@ export const CANONICAL_UNDERLYING: Record<number, Record<string, `0x${string}`>>
   },
   /** Avalanche C-Chain mainnet */
   43114: {
-    USDC: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9fcd248",
+    /** Circle native USDC (6 decimals). Live contract is …Dd9c48a6E (…Dd9fcd248 has no code). */
+    USDC: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
+    /** Membrane EUROe (6 decimals). */
+    EUROe: "0x820802Fa8a99901F52e39acD21177b0BE6EE2974",
+    /** Dexalot ALOT (18 decimals). */
+    ALOT: "0x093783055F9047C2BfF99c4e414501F8A147bC69",
+    /** Avalanche canonical WAVAX (18 decimals). Wrap via `deposit()` payable. */
+    WAVAX: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
   },
 };
 

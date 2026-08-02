@@ -21,6 +21,7 @@ import {
   getDeployConfigPath,
   readDeployConfig as readDeployConfigYaml,
   readDeployConfigSync,
+  soTChainId,
 } from "./deploy-config.js";
 
 /** Etherscan requires the full solc commit suffix; Hardhat build-info may omit it. */
@@ -474,16 +475,18 @@ export type OracleUsdLegs = { localUsd18: bigint; remoteUsd18: bigint };
 /** @deprecated Use {@link oracleUsdPricesForChain} */
 export type OracleLegs = OracleUsdLegs;
 
-/** Live COTI testnet (7082400) or in-process simCoti (7082401). */
+/** Live COTI testnet (7082400), mainnet (2632500), or in-process / local simCoti (7082401). */
 const isCotiFamilyChainId = (chainId: number): boolean => {
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
+  const cotiMainnetId = Number(process.env.COTI_MAINNET_CHAIN_ID || "2632500");
   const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "7082401");
-  return chainId === cotiTestnetId || chainId === simCotiId;
+  return chainId === cotiTestnetId || chainId === cotiMainnetId || chainId === simCotiId;
 };
 
 /**
  * Local = this chain's native token; remote = the paired chain's native token.
- * Sepolia / local Hardhat: local ETH, remote COTI. COTI testnet: local COTI, remote ETH.
+ * Source EVM: local ETH/AVAX, remote COTI. COTI: local COTI, remote ETH (paired default).
+ * Manual fallback spots — live Chainlink/Band feeds override when available.
  */
 export const oracleUsdPricesForChain = (chainId: number): OracleUsdLegs => {
   const eth = usdPerWholeToken18(TESTNET_ETH_USD);
@@ -491,20 +494,23 @@ export const oracleUsdPricesForChain = (chainId: number): OracleUsdLegs => {
   const avax = usdPerWholeToken18(TESTNET_AVAX_USD);
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
   const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "7082401");
-  if (chainId === 11155111 || chainId === 31337 || chainId >= 313_370_000) {
+  // Ethereum mainnet / Sepolia / local Hardhat
+  if (chainId === 1 || chainId === 11155111 || chainId === 31337 || chainId >= 313_370_000) {
     return { localUsd18: eth, remoteUsd18: coti };
   }
-  if (chainId === AVALANCHE_FUJI_CHAIN_ID) {
+  // Avalanche mainnet / Fuji
+  if (chainId === 43_114 || chainId === AVALANCHE_FUJI_CHAIN_ID) {
     return { localUsd18: avax, remoteUsd18: coti };
   }
   if (isCotiFamilyChainId(chainId)) {
+    // COTI↔Avalanche mainnet dry-run still uses ETH remote sentinel in many configs;
+    // remote leg is usually manual or Band — spot is fallback only.
     return { localUsd18: coti, remoteUsd18: eth };
   }
   throw new Error(
-    `Unsupported chainId ${chainId} for testnet oracle legs. ` +
-      `Use Sepolia (11155111), Avalanche Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
-      `COTI testnet (${cotiTestnetId}), simCoti (${simCotiId}), or local (31337), ` +
-      `or set COTI_TESTNET_CHAIN_ID / SIM_COTI_CHAIN_ID to match this network.`
+    `Unsupported chainId ${chainId} for oracle legs. ` +
+      `Use Ethereum (1), Sepolia (11155111), Avalanche (43114), Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
+      `COTI mainnet (2632500), COTI testnet (${cotiTestnetId}), simCoti (${simCotiId}), or local (31337).`
   );
 };
 
@@ -529,6 +535,10 @@ export const BAND_STD_REF_BY_CHAIN: Partial<Record<number, `0x${string}`>> = {
   11155111: "0x8c064bCf7C0DA3B3b090BAbFE8f3323534D84d68",
   43113: "0xDA7c0dC50a0A53AeE6Cac7E059061B7529743F49",
   43114: "0xDA7c0dC50a0A53AeE6Cac7E059061B7529743F49",
+  /** COTI mainnet — Band StdReference proxy */
+  2632500: "0x9503d502435f8e228b874Ba0F792301d4401b523",
+  /** COTI testnet */
+  7082400: "0xb6256dcb23cee06eda2408e73945963606fdddd7",
 };
 
 /** Pack a short symbol (e.g. `ETH`, `USD`) into bytes32 for on-chain feed config. */
@@ -579,6 +589,7 @@ export const recordOracleDeploy = (
 
 export const nativeBandSymbolForChain = (chainId: number): string => {
   if (chainId === AVALANCHE_FUJI_CHAIN_ID || chainId === 43_114) return "AVAX";
+  if (chainId === 2_632_500 || chainId === 7_082_400 || chainId === 7_082_401) return "COTI";
   return "ETH";
 };
 
@@ -659,10 +670,20 @@ export const chainlinkFeedsForChain = (chainId: number): ChainlinkFeedConfig => 
       fetchIntervalSeconds: fetchInterval,
     };
   }
+  if (chainId === 2_632_500) {
+    // COTI mainnet: Band adapter in deployConfig; Chainlink fallbacks unused.
+    return {
+      localFeed: zeroAddress,
+      remoteFeed: zeroAddress,
+      manualLeg: "both",
+      maxStalenessSeconds: mainnetStaleness,
+      fetchIntervalSeconds: fetchInterval,
+    };
+  }
   throw new Error(
     `Unsupported chainId ${chainId} for Chainlink feeds. ` +
       `Use Sepolia (11155111), Fuji (${AVALANCHE_FUJI_CHAIN_ID}), COTI testnet (${cotiTestnetId}), ` +
-      `Ethereum (1), Avalanche (43114), or local (31337).`
+      `COTI mainnet (2632500), Ethereum (1), Avalanche (43114), or local (31337).`
   );
 };
 
@@ -805,17 +826,23 @@ export const feeConfigTupleToJson = (t: FeeConfigTuple): FeeConfigJson => ({
  * Sepolia: local ETH (variable), remote COTI (constant). COTI: local COTI (constant), remote ETH (variable).
  */
 export const testnetMinFeeConfigsForChain = (chainId: number): { local: FeeConfigTuple; remote: FeeConfigTuple } => {
-  if (chainId === 11155111 || chainId === 31337 || chainId === AVALANCHE_FUJI_CHAIN_ID) {
+  if (
+    chainId === 1 ||
+    chainId === 11155111 ||
+    chainId === 31337 ||
+    chainId === AVALANCHE_FUJI_CHAIN_ID ||
+    chainId === 43_114
+  ) {
     return { local: { ...FEE_CONFIG_SEPOLIA_SIDE }, remote: { ...FEE_CONFIG_COTI_SIDE } };
   }
   if (isCotiFamilyChainId(chainId)) {
     return { local: { ...FEE_CONFIG_COTI_SIDE }, remote: { ...FEE_CONFIG_SEPOLIA_SIDE } };
   }
   throw new Error(
-    `Unsupported chainId ${chainId} for testnet fee configs. ` +
-      `Use Sepolia (11155111), Avalanche Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
-      `COTI testnet / simCoti, or local (31337), ` +
-      `or set COTI_TESTNET_CHAIN_ID / SIM_COTI_CHAIN_ID to match this network.`
+    `Unsupported chainId ${chainId} for fee configs. ` +
+      `Use Ethereum (1), Sepolia (11155111), Avalanche (43114), Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
+      `COTI mainnet/testnet / simCoti, or local (31337), ` +
+      `or set feeConfig in deployConfig.chains.${chainId}.`
   );
 };
 
@@ -973,7 +1000,13 @@ const manualUsdLegsForChain = (chainId: number, oracleConfig?: OracleConfigJson)
   const cotiSpot = oracleConfig?.cotiUsdSpot?.trim();
   if (!cotiSpot) return legs;
   const coti = usdPerWholeToken18(cotiSpot);
-  if (chainId === 11155111 || chainId === 31337 || chainId === AVALANCHE_FUJI_CHAIN_ID) {
+  if (
+    chainId === 1 ||
+    chainId === 11155111 ||
+    chainId === 31337 ||
+    chainId === AVALANCHE_FUJI_CHAIN_ID ||
+    chainId === 43_114
+  ) {
     return { ...legs, remoteUsd18: coti };
   }
   if (isCotiFamilyChainId(chainId)) {
@@ -1632,9 +1665,10 @@ export const readDeployConfig = async (): Promise<DeployConfig> =>
   (await readDeployConfigYaml()) as DeployConfig;
 
 export const getChainConfig = (config: DeployConfig, chainId: number, label: string) => {
-  const chainConfig = config.chains?.[String(chainId)];
+  const id = soTChainId(chainId, config);
+  const chainConfig = config.chains?.[String(id)];
   if (!chainConfig) {
-    throw new Error(`Missing deploy config for chainId ${chainId} (${label}).`);
+    throw new Error(`Missing deploy config for chainId ${id} (${label}).`);
   }
   return chainConfig;
 };

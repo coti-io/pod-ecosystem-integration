@@ -132,12 +132,16 @@ export const collectRoleMismatches = async (params: {
     if (typeof addrRaw !== "string" || !/^0x[a-fA-F0-9]{40}$/.test(addrRaw)) return;
     const code = await publicClient.getBytecode({ address: addrRaw as Address });
     if (!code || code === "0x") return;
-    const owner = (await publicClient.readContract({
-      address: addrRaw as Address,
-      abi: ownableAbi,
-      functionName: "owner",
-    })) as Address;
-    pushMismatch(mismatches, label, "owner", expectedOwner, owner);
+    try {
+      const owner = (await publicClient.readContract({
+        address: addrRaw as Address,
+        abi: ownableAbi,
+        functionName: "owner",
+      })) as Address;
+      pushMismatch(mismatches, label, "owner", expectedOwner, owner);
+    } catch {
+      // Not Ownable (e.g. MpcExecutor is InboxUser-only) — skip.
+    }
   };
 
   await checkOwnable("inbox", chainCfg.inbox, roles.inbox.owner);
@@ -193,7 +197,7 @@ export const collectRoleMismatches = async (params: {
   }
 
   await checkOwnable("mpcAdder", chainCfg.mpcAdder, roles.mpcAdder.owner);
-  await checkOwnable("cotiExecutor", chainCfg.cotiExecutor, roles.cotiExecutor.owner);
+  // MpcExecutor is not Ownable — do not check cotiExecutor.owner.
   await checkOwnable("cotiMother", chainCfg.cotiMother, roles.cotiMother.owner);
 
   if (
@@ -303,11 +307,17 @@ export const configureChainRoles = async (params: {
     const addr = addrRaw as Address;
     const code = await publicClient.getBytecode({ address: addr });
     if (!code || code === "0x") return;
-    const owner = (await publicClient.readContract({
-      address: addr,
-      abi: ownableAbi,
-      functionName: "owner",
-    })) as Address;
+    let owner: Address;
+    try {
+      owner = (await publicClient.readContract({
+        address: addr,
+        abi: ownableAbi,
+        functionName: "owner",
+      })) as Address;
+    } catch {
+      // Not Ownable (e.g. MpcExecutor) — skip.
+      return;
+    }
     if (eqAddr(owner, expectedOwner)) return;
     if (!eqAddr(owner, account)) {
       skipped.push(`${label}.owner: signer is not current owner ${owner}`);
@@ -396,7 +406,7 @@ export const configureChainRoles = async (params: {
   }
 
   await tryTransferOwnable("mpcAdder", chainCfg.mpcAdder, roles.mpcAdder.owner);
-  await tryTransferOwnable("cotiExecutor", chainCfg.cotiExecutor, roles.cotiExecutor.owner);
+  // MpcExecutor is not Ownable — skip cotiExecutor ownership transfer.
   await tryTransferOwnable("cotiMother", chainCfg.cotiMother, roles.cotiMother.owner);
 
   if (

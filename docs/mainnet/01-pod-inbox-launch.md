@@ -12,13 +12,28 @@ Step-by-step for deploying the PoD messaging stack on **COTI mainnet** (`2632500
 3. Config: `DEPLOY_CONFIG=deployConfig.mainnet.yaml`
 4. Keys in `.env`: `ETHEREUM_PRIVATE_KEY` / `AVALANCHE_PRIVATE_KEY` / `COTI_MAINNET_PRIVATE_KEY` (or `PRIVATE_KEY`), plus RPC URLs.
 
-Dry-run first (optional):
+Dry-run first (recommended):
 
 ```bash
+# SOURCE = Anvil tip. COTI = sim-coti EDR tip-fork of archive COTI + MPC @ 0x64.
+# Upstream default: https://mainnet-archivenode-01.coti.io/rpc (not pruned mainnet.coti.io)
 npm run fork:cli -- setup --source avalanche --coti mainnet
-# set forks.enabled: true in deployConfig.mainnet.yaml
-DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=forkSource npm run deploy:cli
+# set forks.enabled: true and label: FORKED in deployConfig.mainnet.yaml
+
+export DEPLOY_CONFIG=deployConfig.mainnet.yaml
+export AVALANCHE_RPC_URL=http://127.0.0.1:8545
+export SIM_COTI_RPC_URL=http://127.0.0.1:8546
+export COTI_FORK_RPC_URL=http://127.0.0.1:8546
+export COTI_FORK_NETWORK=localSimCoti
+
+DEPLOY_CLI_NETWORK=avalanche npm run deploy:cli -- --noverify
+DEPLOY_CLI_NETWORK=localSimCoti npm run deploy:cli -- --noverify   # COTI side
 ```
+
+`fork:cli setup` tip-forks COTI from the archive RPC (CreateX + Band), injects fake MPC, and funds the deployer.
+Confirm the CLI banner shows **FORKED** before broadcasting.
+
+Full orchestration (services + PP): see `pod-integration-tests/deployments/builder/MAINNET.md`.
 
 ## Order of operations
 
@@ -97,19 +112,22 @@ oracle:
         bandQuote: "USD"
 ```
 
-### Manual / plain (typical on COTI)
+### Manual / plain (fallback — prefer Band on COTI mainnet)
 
 ```yaml
 oracle:
   adapter: plain
   manualLegs:
-    localUsdSpot: "0.05"     # COTI/USD
-    remoteUsdSpot: "3000"    # remote native/USD
+    localUsdSpot: "0.013"    # COTI/USD
+    remoteUsdSpot: "1850"    # remote native/USD
   feeds:
     inboxLocal: {}
     collateral:
       USDC: { pegUsd: "1" }
 ```
+
+COTI mainnet (`2632500`) in `deployConfig.mainnet.yaml` uses **Band**:
+`bandStdRef: 0x9503d502…b523`, `inboxLocal: COTI/USD`, `inboxRemote: ETH/USD`.
 
 After deploy: CLI `priceOracle` seeds feeds/manual legs and calls `refreshCache`. Re-run when prices drift.
 

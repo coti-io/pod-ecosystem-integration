@@ -52,6 +52,8 @@ Configuration (YAML):
 - `deployConfig.mainnet.yaml` — Ethereum + Avalanche + COTI mainnet
 
 Mainnet guides: [`docs/mainnet/`](./docs/mainnet/).
+Dry-run orchestration (forks → services → PP): see sibling
+`pod-integration-tests/deployments/builder/MAINNET.md`.
 
 ```bash
 npm run deploy:cli
