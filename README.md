@@ -26,7 +26,7 @@ npm install          # runs link:contracts via postinstall
 npx hardhat compile
 ```
 
-Run `npm run link:contracts` after changing sibling repos — it rsyncs inbox + pod sources into `contracts/` (required before compile).
+Run `npm run link:contracts` after changing sibling repos — it rsyncs inbox + pod sources into `contracts/` (required before compile). Shared APIs (`IInbox`, `MpcAbiCodec`, …) come from **`@coti-io/coti-contracts`** (`file:../coti-contracts`); do not re-vendor them under the inbox repo.
 
 ## VS Code / Cursor workspace
 
@@ -52,6 +52,8 @@ Configuration (YAML):
 - `deployConfig.mainnet.yaml` — Ethereum + Avalanche + COTI mainnet
 
 Mainnet guides: [`docs/mainnet/`](./docs/mainnet/).
+Dry-run orchestration (forks → services → PP): see sibling
+`pod-integration-tests/deployments/builder/MAINNET.md`.
 
 ```bash
 npm run deploy:cli
@@ -64,12 +66,14 @@ npm run verify:deployments              # + MpcAdder.add round-trips
 
 Inbox deploy scripts: run from **coti-pod-inbox-contracts** (`deploy:inbox`, `relay`).
 
-## Interface sync
+## Shared PoD APIs
 
-When inbox APIs change, run from **coti-pod-inbox-contracts**:
+Canonical copies live in **coti-contracts** (`contracts/pod/…`). Change them there, then:
 
 ```bash
-npm run sync:interfaces -- ../coti-contracts
+# inbox + PEI both use file:../coti-contracts
+cd ../coti-pod-inbox-contracts && npm install && npx hardhat compile
+cd ../pod-ecosystem-integration && npm install && npm run link:contracts && npx hardhat compile
 ```
 
-Then see `contracts/pod/SYNC_MANIFEST.json` in coti-contracts and re-run `npm run link:contracts` here.
+`coti-pod-inbox-contracts` runs `npm run check:no-vendored-pod-apis` to prevent re-copying those files.
