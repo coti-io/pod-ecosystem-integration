@@ -1,11 +1,68 @@
 import "dotenv/config";
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
 import "@nomicfoundation/hardhat-verify";
 import hardhatToolboxViemPlugin from "@nomicfoundation/hardhat-toolbox-viem";
 import { configVariable, defineConfig } from "hardhat/config";
 
+const require = createRequire(import.meta.url);
+
 const envOrConfig = (key: string) => process.env[key] ?? configVariable(key);
 const privateKeyFor = (key: string) =>
   process.env[key] ?? process.env.PRIVATE_KEY ?? configVariable(key);
+
+/** Resolve an installed package's root directory (works when package.json is not exported). */
+const resolvePackageRoot = (packageName: string): string => {
+  const direct = path.join(process.cwd(), "node_modules", ...packageName.split("/"));
+  if (fs.existsSync(path.join(direct, "package.json"))) return direct;
+  try {
+    return path.dirname(require.resolve(`${packageName}/package.json`));
+  } catch {
+    const probe = require.resolve(packageName);
+    let dir = path.dirname(probe);
+    while (dir !== path.dirname(dir)) {
+      if (fs.existsSync(path.join(dir, "package.json"))) return dir;
+      dir = path.dirname(dir);
+    }
+    throw new Error(`Cannot resolve package root for ${packageName}`);
+  }
+};
+
+/** Collect `.sol` roots from an installed package for Hardhat `npmFilesToBuild`. */
+const npmSolidityRoots = (packageName: string, subdir: string, opts?: { skipTestDir?: boolean }): string[] => {
+  const pkgRoot = resolvePackageRoot(packageName);
+  const root = path.join(pkgRoot, subdir);
+  if (!fs.existsSync(root)) {
+    throw new Error(`Missing Solidity tree for ${packageName}: ${root}`);
+  }
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (opts?.skipTestDir && ent.name === "test") continue;
+        walk(full);
+        continue;
+      }
+      if (ent.name.endsWith(".sol")) {
+        const rel = path.relative(pkgRoot, full).split(path.sep).join("/");
+        out.push(`${packageName}/${rel}`);
+      }
+    }
+  };
+  walk(root);
+  return out.sort();
+};
+
+/** Inbox + coti-contracts pod/oracle + sim-coti — no link-contracts mirror. */
+const npmFilesToBuild = [
+  ...npmSolidityRoots("@coti-io/coti-pod-inbox-contracts", "contracts"),
+  ...npmSolidityRoots("@coti-io/coti-contracts", "contracts/pod"),
+  ...npmSolidityRoots("@coti-io/coti-contracts", "contracts/oracle"),
+  ...npmSolidityRoots("@coti-io/sim-coti-node", "contracts", { skipTestDir: true }),
+];
+
 
 /** COTI testnet: prefer dedicated key, then `_PRIVATE_KEY` (miner / alternate account in `.env`), then `PRIVATE_KEY`. */
 const privateKeyForCotiTestnet = () =>
@@ -53,6 +110,10 @@ const cotiTestnetAccounts = () => collectTestPrivateKeys();
 
 export default defineConfig({
   plugins: [hardhatToolboxViemPlugin],
+  // Local dir stays empty; real sources are npm package files below.
+  paths: {
+    sources: "./contracts",
+  },
   verify: {
     etherscan: {
       apiKey: envOrConfig("ETHERSCAN_API_KEY"),
@@ -119,6 +180,7 @@ export default defineConfig({
     // Inbox / MpcExecutor / mothers deploy without Shanghai+ opcodes.
     version: "0.8.28",
     preferWasm: false,
+    npmFilesToBuild,
     settings: {
       evmVersion: "paris",
       viaIR: true,

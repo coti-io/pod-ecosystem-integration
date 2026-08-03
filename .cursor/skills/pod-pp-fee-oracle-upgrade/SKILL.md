@@ -36,7 +36,7 @@ Portal fees can be **dynamic** when factory fee config has `percentageBps > 0` a
 
 ## Upgrade Checklist
 
-1. **Refresh ABIs** from current `PrivacyPortal`, `PrivacyPortalFactory`, `IPodPriceOracle` (vendored under `pod-ecosystem-integration/contracts/` after `npm run link:contracts`).
+1. **Refresh ABIs** from current `PrivacyPortal`, `PrivacyPortalFactory`, `IPodPriceOracle` (compiled from `@coti-io/coti-contracts` via Hardhat `paths.sources`).
 2. **Replace fee quoting** — call `portal.estimateDepositFees(amount)` or `portal.estimateWithdrawFees(amount)` instead of hand-rolling `pToken.estimateFee()` alone.
 3. **Add `portalFee` to writeContract args** — pass the quoted `portalFee`; set `value` to portal + PoD totals (see table above).
 4. **Remove burn fee from withdraw UI** — drop burn lines from fee breakdown and `requestWithdrawWithPermit` args; optionally show admin `pendingBurnAmount` / `estimateBatchBurnFees` for ops dashboards only.
