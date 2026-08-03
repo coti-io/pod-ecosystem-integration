@@ -61,6 +61,7 @@
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.0",
+    "@coti-io/coti-contracts": "file:../coti-contracts"
   }
 }

@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# Mirror sibling repos into contracts/ for Hardhat (single source root; imports use .. across pod/inbox).
+# Mirror sibling repos into contracts/ for Hardhat (single source root).
+#
+# Shared PoD APIs (IInbox, InboxUser, MpcAbiCodec, …) live only in coti-contracts.
+# Inbox sources import them via `@coti-io/coti-contracts/...` (PEI depends on
+# `file:../coti-contracts`). Pod dApps are still rsynced under contracts/pod/.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONTRACTS="${ROOT}/contracts"
 INBOX="${ROOT}/../coti-pod-inbox-contracts/contracts"
 POD="${ROOT}/../coti-contracts/contracts/pod"
+COTI_ROOT="${ROOT}/../coti-contracts/contracts"
 MPC_SRC="${ROOT}/../pod-mpc-lib/contracts/utils/mpc"
 # COTI-side executor + test harness live in pod-mpc-lib (not coti-contracts).
 EXECUTOR_SRC="${ROOT}/../pod-mpc-lib/contracts/mpc/coti-side"
@@ -19,30 +24,36 @@ fi
 rm -rf "$CONTRACTS"
 mkdir -p "$CONTRACTS"
 
-# Inbox implementation at contracts/ root
+# Inbox implementation at contracts/ root (no duplicated shared APIs)
 rsync -a \
   --exclude 'utils/' \
   "$INBOX/" "$CONTRACTS/"
 
-# Pod dApps under contracts/pod/ (interfaces + PoD-side apps; no Inbox/MpcExecutor impls)
+# Pod dApps under contracts/pod/ (interfaces + PoD-side apps; SoT for shared APIs)
 rsync -a "$POD/" "$CONTRACTS/pod/"
+
+# Band / shared oracle interfaces used by inbox fee adapters via package imports
+if [[ -d "${COTI_ROOT}/oracle" ]]; then
+  mkdir -p "$CONTRACTS/oracle"
+  rsync -a "${COTI_ROOT}/oracle/" "$CONTRACTS/oracle/"
+fi
 
 # MpcCore (shared; prefer pod-mpc-lib vendored copy for ^0.8.20)
 mkdir -p "$CONTRACTS/utils/mpc"
 if [[ -d "$MPC_SRC" ]]; then
   rsync -a "$MPC_SRC/" "$CONTRACTS/utils/mpc/"
 else
-  rsync -a "${ROOT}/../coti-contracts/contracts/utils/mpc/" "$CONTRACTS/utils/mpc/"
+  rsync -a "${COTI_ROOT}/utils/mpc/" "$CONTRACTS/utils/mpc/"
 fi
 
 # MpcExecutor (+ COTI test harness): rewrite imports for contracts/pod/mpc/coti-side/
+# InboxUser SoT is contracts/pod/InboxUser.sol → keep ../../InboxUser.sol from coti-side/.
 EXECUTOR_DST="${CONTRACTS}/pod/mpc/coti-side"
 mkdir -p "$EXECUTOR_DST"
 if [[ -d "$EXECUTOR_SRC" ]]; then
   for f in MpcExecutor.sol MpcExecutorCotiProxyInbox.sol MpcExecutorCotiTest.sol; do
     if [[ -f "${EXECUTOR_SRC}/${f}" ]]; then
       sed -e 's|import "../../utils/mpc/MpcCore.sol";|import "../../../utils/mpc/MpcCore.sol";|' \
-          -e 's|import "../../InboxUser.sol";|import "../../../InboxUser.sol";|' \
           "${EXECUTOR_SRC}/${f}" > "${EXECUTOR_DST}/${f}"
     fi
   done
