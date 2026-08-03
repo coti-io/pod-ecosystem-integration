@@ -3,7 +3,7 @@
 #
 # Shared PoD APIs (IInbox, InboxUser, MpcAbiCodec, …) live only in coti-contracts.
 # Inbox sources import them via `@coti-io/coti-contracts/...` (PEI depends on
-# `file:../coti-contracts`). Pod dApps are still rsynced under contracts/pod/.
+# `@coti-io/coti-contracts` from npm). Pod dApps are still rsynced under contracts/pod/.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -26,7 +26,7 @@ npm install          # runs link:contracts via postinstall
 npx hardhat compile
 ```
 
-Run `npm run link:contracts` after changing sibling repos — it rsyncs inbox + pod sources into `contracts/` (required before compile). Shared APIs (`IInbox`, `MpcAbiCodec`, …) come from **`@coti-io/coti-contracts`** (`file:../coti-contracts`); do not re-vendor them under the inbox repo.
+Run `npm run link:contracts` after changing sibling repos — it rsyncs inbox + pod sources into `contracts/` (required before compile). Shared APIs (`IInbox`, `MpcAbiCodec`, …) come from **`@coti-io/coti-contracts@1.3.5`**; do not re-vendor them under the inbox repo.
 
 ## VS Code / Cursor workspace
 
@@ -68,10 +68,10 @@ Inbox deploy scripts: run from **coti-pod-inbox-contracts** (`deploy:inbox`, `re
 
 ## Shared PoD APIs
 
-Canonical copies live in **coti-contracts** (`contracts/pod/…`). Change them there, then:
+Canonical copies live in **coti-contracts** (`contracts/pod/…`). Change them there, publish/bump the npm package, then:
 
 ```bash
-# inbox + PEI both use file:../coti-contracts
+# consumers pin @coti-io/coti-contracts (currently 1.3.5)
 cd ../coti-pod-inbox-contracts && npm install && npx hardhat compile
 cd ../pod-ecosystem-integration && npm install && npm run link:contracts && npx hardhat compile
 ```
