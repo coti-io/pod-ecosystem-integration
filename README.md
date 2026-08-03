@@ -76,4 +76,3 @@ cd ../coti-pod-inbox-contracts && npm install && npx hardhat compile
 cd ../pod-ecosystem-integration && npm install && npm run link:contracts && npx hardhat compile
 ```
 
-`coti-pod-inbox-contracts` runs `npm run check:no-vendored-pod-apis` to prevent re-copying those files.
