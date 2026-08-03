@@ -6,7 +6,7 @@
  * Run (sim):  `npm run test:pp-remount`
  * Live COTI:  `COTI_BACKEND=live npm run test:pp-remount`
  *
- * Requires sibling coti-contracts with portal remount APIs linked via `npm run link:contracts`.
+ * Requires sibling `coti-contracts` (via `file:../coti-contracts`) with portal remount APIs.
  * Step logs: grep `[mpc-test] privacy-portal-system:`
  */
 import assert from "node:assert/strict";

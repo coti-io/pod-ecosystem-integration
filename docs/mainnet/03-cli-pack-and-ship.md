@@ -20,8 +20,8 @@ pod-deploy/
   hardhat.config.ts
   package.json
   package-lock.json
-  artifacts/                         # after `npm run compile` / link:contracts
-  contracts/ or linked packages      # as required by hardhat compile
+  artifacts/                         # after `npm run compile`
+  # Solidity comes from package deps (inbox / coti-contracts / sim-coti)
   node_modules/                      # or npm ci on server
   .env                               # keys + RPC URLs (never commit)
 ```

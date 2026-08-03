@@ -22,11 +22,11 @@ workspaces/
 ```
 
 ```bash
-npm install          # runs link:contracts via postinstall
+npm install          # file: deps → ../coti-pod-inbox-contracts, ../coti-contracts, ../sim-coti-node
 npx hardhat compile
 ```
 
-Run `npm run link:contracts` after changing sibling repos — it rsyncs inbox + pod sources into `contracts/` (required before compile). Shared APIs (`IInbox`, `MpcAbiCodec`, …) come from **`@coti-io/coti-contracts@1.3.5`**; do not re-vendor them under the inbox repo.
+Hardhat compiles Solidity from those packages via `solidity.npmFilesToBuild` in `hardhat.config.ts` (Hardhat 3 does not allow `paths.sources` under `node_modules`). No `link-contracts` mirror. After editing a sibling repo, recompile here (re-run `npm install` only if `package.json` / lockfile changed).
 
 ## VS Code / Cursor workspace
 
@@ -68,11 +68,10 @@ Inbox deploy scripts: run from **coti-pod-inbox-contracts** (`deploy:inbox`, `re
 
 ## Shared PoD APIs
 
-Canonical copies live in **coti-contracts** (`contracts/pod/…`). Change them there, publish/bump the npm package, then:
+Canonical copies live in **coti-contracts** (`contracts/pod/…`). This workspace depends on it via `file:../coti-contracts` (and the inbox via `file:../coti-pod-inbox-contracts`). Change sources in those repos, then:
 
 ```bash
-# consumers pin @coti-io/coti-contracts (currently 1.3.5)
 cd ../coti-pod-inbox-contracts && npm install && npx hardhat compile
-cd ../pod-ecosystem-integration && npm install && npm run link:contracts && npx hardhat compile
+cd ../pod-ecosystem-integration && npx hardhat compile
 ```
 
