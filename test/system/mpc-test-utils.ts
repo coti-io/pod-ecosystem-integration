@@ -1,13 +1,24 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createPublicClient, decodeAbiParameters, defineChain, http, toFunctionSelector, toHex, zeroAddress, type Hex } from "viem";
+import {
+  createPublicClient,
+  decodeAbiParameters,
+  decodeErrorResult,
+  defineChain,
+  http,
+  toFunctionSelector,
+  toHex,
+  zeroAddress,
+  type Hex,
+} from "viem";
 import {
   deployTestnetPriceOracle,
   podConfigureKeepInbox,
   resolveDeployerAddress,
   waitMined,
 } from "../../scripts/deploy-utils.js";
+import { deployLinkedInbox } from "../../scripts/deploy-inbox-linked.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { ONBOARD_CONTRACT_ADDRESS, Wallet as CotiWallet } from "@coti-io/coti-ethers";
 import { decryptUint, decryptUint256 as sdkDecryptUint256, prepareIT, prepareIT256 } from "@coti-io/coti-sdk-typescript";
@@ -188,11 +199,12 @@ export const logStep = (message: string) => {
   console.log(`[mpc-test] ${message}`);
 };
 
+
 /**
  * Deploy the (constructor-arg-free) {Inbox} and run its one-time {Inbox.init} initializer,
  * setting `chainId` and keeping ownership with the deploying account. Mirrors the production
  * CreateX `deployCreate3AndInit` flow, but deploys directly since CreateX is not present on the
- * in-process EDR test network.
+ * in-process EDR test network. Links {MpcAbiCodec} (required for mainnet-sized Inbox bytecode).
  */
 export const deployInboxWithInit = async (
   hh: {
@@ -202,7 +214,7 @@ export const deployInboxWithInit = async (
   chainId: bigint,
   clientOpts?: any
 ): Promise<any> => {
-  const inbox = await hh.deployContract("Inbox", [], clientOpts);
+  const inbox = await deployLinkedInbox(hh, clientOpts);
   const owner: `0x${string}` =
     clientOpts?.client?.wallet?.account?.address ??
     (await hh.getWalletClients())[0].account.address;
@@ -232,20 +244,64 @@ export const fundContractForInboxFees = async (
  * Remote leg uses a constant minimum gas-units floor (aligned with `REMOTE_MIN_GAS_UNITS` there) so the remote branch
  * in `calculateTwoWayFeeRequired` matches validation (`expectedMinFee` with constant remote config).
  */
-const MPC_SYSTEM_INBOX_LOCAL_MIN_FEE = {
+export type SystemInboxFeeConfig = {
+  constantFee: bigint;
+  gasPerByte: bigint;
+  callbackExecutionGas: bigint;
+  errorLength: bigint;
+  bufferRatioX10000: bigint;
+  maxMethodCallBytes: bigint;
+  maxExecutionGas: bigint;
+  gasPriceMul: bigint;
+  gasPriceDiv: bigint;
+};
+
+export const SYSTEM_INBOX_LOCAL_MIN_FEE: SystemInboxFeeConfig = {
   constantFee: 0n,
   gasPerByte: 10n,
   callbackExecutionGas: 100_000n,
   errorLength: 300n,
   bufferRatioX10000: 100n,
+  maxMethodCallBytes: 8192n,
+  maxExecutionGas: 5_000_000n,
+  gasPriceMul: 1n,
+  gasPriceDiv: 1n,
 };
-const MPC_SYSTEM_INBOX_REMOTE_MIN_FEE = {
+export const SYSTEM_INBOX_REMOTE_MIN_FEE: SystemInboxFeeConfig = {
   constantFee: 18_000_000n,
   gasPerByte: 0n,
   callbackExecutionGas: 0n,
   errorLength: 0n,
   bufferRatioX10000: 0n,
+  maxMethodCallBytes: 8192n,
+  maxExecutionGas: 18_000_000n,
+  gasPriceMul: 1n,
+  gasPriceDiv: 1n,
 };
+
+/**
+ * Owner-only `updateMinFeeConfigs` with optional per-leg overrides (gasPriceMul/Div, caps, …).
+ * Defaults match {@link ensureMpcInboxOracleAndFees}.
+ */
+export async function applySystemInboxMinFeeConfigs(params: {
+  label: string;
+  inbox: any;
+  publicClient: any;
+  walletClient: any;
+  local?: Partial<SystemInboxFeeConfig>;
+  remote?: Partial<SystemInboxFeeConfig>;
+}): Promise<void> {
+  const { label, inbox, publicClient, walletClient } = params;
+  const deployer = await resolveDeployerAddress(walletClient);
+  const local = { ...SYSTEM_INBOX_LOCAL_MIN_FEE, ...params.local };
+  const remote = { ...SYSTEM_INBOX_REMOTE_MIN_FEE, ...params.remote };
+  const feeHash = await inbox.write.updateMinFeeConfigs([local, remote], { account: deployer });
+  await waitMined(publicClient, feeHash);
+  logStep(
+    `${label}: updateMinFeeConfigs local mul/div=${local.gasPriceMul}/${local.gasPriceDiv} ` +
+      `remote mul/div=${remote.gasPriceMul}/${remote.gasPriceDiv}`
+  );
+}
 
 /**
  * {InboxMiner} uses `Request.targetFee` as the subcall gas budget (`target.call{gas: targetFee}(...)`).
@@ -321,12 +377,12 @@ export async function ensureMpcInboxOracleAndFees(params: {
     logStep(`${label}: PriceOracle already set: ${currentOracle}`);
   }
 
-  const feeHash = await inbox.write.updateMinFeeConfigs(
-    [MPC_SYSTEM_INBOX_LOCAL_MIN_FEE, MPC_SYSTEM_INBOX_REMOTE_MIN_FEE],
-    { account: deployer }
-  );
-  await waitMined(publicClient, feeHash);
-  logStep(`${label}: updateMinFeeConfigs applied`);
+  await applySystemInboxMinFeeConfigs({
+    label,
+    inbox,
+    publicClient,
+    walletClient,
+  });
 
   // Pin fee→gas conversion to the same assumed price used by {@link estimateGas} (POD-07).
   // Without this, Hardhat basefee / minGasPriceWei floors shrink gas-unit budgets and trip CallbackFeeTooLow.
@@ -336,6 +392,29 @@ export async function ensureMpcInboxOracleAndFees(params: {
   );
   await waitMined(publicClient, boundsHash);
   logStep(`${label}: setGasPriceBounds pinned to estimate assumed gas price`);
+}
+
+/** Peg inbox PriceOracle legs to 1 USD / 1 USD (unit-test style fee math). */
+export async function pegInboxOracleUsd1to1(params: {
+  label: string;
+  viem: any;
+  inbox: any;
+  publicClient: any;
+  walletClient: any;
+}): Promise<void> {
+  const { label, viem, inbox, publicClient, walletClient } = params;
+  const deployer = await resolveDeployerAddress(walletClient);
+  const oracleAddr = (await inbox.read.priceOracle()) as `0x${string}`;
+  assert.notEqual(oracleAddr, zeroAddress, `${label}: priceOracle not set`);
+  const oracle = await viem.getContractAt("PriceOracle", oracleAddr, {
+    client: { public: publicClient, wallet: walletClient },
+  });
+  const oneUsd = 10n ** 18n;
+  const h1 = await oracle.write.setLocalTokenPriceUSD([oneUsd], { account: deployer });
+  await waitMined(publicClient, h1);
+  const h2 = await oracle.write.setRemoteTokenPriceUSD([oneUsd], { account: deployer });
+  await waitMined(publicClient, h2);
+  logStep(`${label}: oracle pegged to 1/1 USD`);
 }
 
 /** Extra gas on the `batchProcessRequests` tx so the inbox can forward `targetFee` to the subcall (EIP-150). */
@@ -610,6 +689,152 @@ export type MineRequestResult = {
   requestIdUsed: `0x${string}`;
 };
 
+/** Destination-side mined payload (same shape as `IInboxMiner.MinedRequest`). */
+export type MinedRequest = {
+  requestId: `0x${string}`;
+  sourceContract: `0x${string}`;
+  targetContract: `0x${string}`;
+  methodCall: RequestMethodCall;
+  callbackSelector: `0x${string}`;
+  errorSelector: `0x${string}`;
+  isTwoWay: boolean;
+  sourceRequestId: `0x${string}`;
+  targetFee: bigint;
+  callerFee: bigint;
+};
+
+/**
+ * Map an outbound {@link Request} to the mined struct used by `batchProcessRequests` /
+ * `estimateExecutionGasForMiner`. Same field mapping as {@link mineRequest}.
+ */
+export function toMinedRequest(request: Request, targetFeeOverride?: bigint): MinedRequest {
+  const targetFee =
+    targetFeeOverride !== undefined
+      ? targetFeeOverride
+      : request.targetFee > 0n
+        ? request.targetFee
+        : DEFAULT_MINED_TARGET_EXECUTION_GAS;
+  return {
+    requestId: request.requestId,
+    sourceContract: request.originalSender,
+    targetContract: request.targetContract,
+    methodCall: request.methodCall,
+    callbackSelector: request.callbackSelector ?? "0x00000000",
+    errorSelector: request.errorSelector ?? "0x00000000",
+    isTwoWay: request.isTwoWay,
+    sourceRequestId: request.sourceRequestId,
+    targetFee,
+    callerFee: request.callerFee,
+  };
+}
+
+/** ABI fragment for C-04 always-revert estimate. */
+export const EXECUTION_GAS_ESTIMATE_ERROR_ABI = [
+  {
+    type: "error",
+    name: "ExecutionGasEstimate",
+    inputs: [
+      { name: "gasUsed", type: "uint256" },
+      { name: "responseDataSize", type: "uint256" },
+      { name: "errorDataSize", type: "uint256" },
+    ],
+  },
+] as const;
+
+export type ExecutionGasEstimateResult = {
+  gasUsed: bigint;
+  responseDataSize: bigint;
+  errorDataSize: bigint;
+};
+
+/** Pull revert data from viem / Hardhat simulate errors. */
+export function extractRevertData(error: unknown): `0x${string}` | undefined {
+  const seen = new Set<unknown>();
+  const visit = (node: unknown): `0x${string}` | undefined => {
+    if (!node || typeof node !== "object" || seen.has(node)) return undefined;
+    seen.add(node);
+    const e = node as any;
+    const candidates = [e.data, e.raw, e.cause?.data, e.details];
+    for (const raw of candidates) {
+      if (typeof raw === "string" && raw.startsWith("0x") && raw.length >= 10) {
+        return raw as `0x${string}`;
+      }
+      if (typeof raw?.data === "string" && raw.data.startsWith("0x") && raw.data.length >= 10) {
+        return raw.data as `0x${string}`;
+      }
+    }
+    if (typeof e.walk === "function") {
+      try {
+        const walked = e.walk((x: any) => (typeof x?.data === "string" ? x : null));
+        if (walked?.data?.startsWith?.("0x")) return walked.data as `0x${string}`;
+      } catch {
+        // ignore
+      }
+    }
+    return visit(e.cause);
+  };
+  return visit(error);
+}
+
+export function parseExecutionGasEstimate(error: unknown): ExecutionGasEstimateResult {
+  const data = extractRevertData(error);
+  if (data) {
+    try {
+      const decoded = decodeErrorResult({ abi: EXECUTION_GAS_ESTIMATE_ERROR_ABI, data });
+      if (decoded.errorName === "ExecutionGasEstimate") {
+        const [gasUsed, responseDataSize, errorDataSize] = decoded.args as [bigint, bigint, bigint];
+        return { gasUsed, responseDataSize, errorDataSize };
+      }
+    } catch {
+      // fall through to message parse
+    }
+  }
+
+  // Hardhat/viem often surfaces only the decoded custom error in the message (no hex `data`).
+  const msg = [
+    (error as any)?.details,
+    (error as any)?.shortMessage,
+    (error as any)?.message,
+    String(error),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const match = msg.match(/ExecutionGasEstimate\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)\)/);
+  assert.ok(match, `missing ExecutionGasEstimate revert data: ${msg.slice(0, 500)}`);
+  return {
+    gasUsed: BigInt(match[1]),
+    responseDataSize: BigInt(match[2]),
+    errorDataSize: BigInt(match[3]),
+  };
+}
+
+/**
+ * C-04 public preflight: `eth_call` / simulate `estimateExecutionGasForMiner` and decode the
+ * always-revert {@link ExecutionGasEstimateResult}. Does not persist state.
+ */
+export async function callEstimateExecutionGasForMiner(params: {
+  inbox: any;
+  publicClient: any;
+  sourceChainId: bigint;
+  mined: MinedRequest;
+  maxUserGas: bigint;
+  account: `0x${string}`;
+}): Promise<ExecutionGasEstimateResult> {
+  const { inbox, publicClient, sourceChainId, mined, maxUserGas, account } = params;
+  try {
+    await publicClient.simulateContract({
+      address: inbox.address,
+      abi: inbox.abi,
+      functionName: "estimateExecutionGasForMiner",
+      args: [sourceChainId, mined, maxUserGas],
+      account,
+    });
+    assert.fail("estimateExecutionGasForMiner must always revert with ExecutionGasEstimate");
+  } catch (error) {
+    return parseExecutionGasEstimate(error);
+  }
+}
+
 /** Context shape required by mineRequest (64-bit, wide MPC, etc.). */
 export type MineRequestContext = {
   contracts: { inboxCoti: any; inboxSepolia: any };
@@ -724,19 +949,8 @@ export const mineRequest = async (
       sourceChainId,
       [
         {
+          ...toMinedRequest(request, targetFeeForMine),
           requestId: nextRequestId,
-          // Dual miners (PEI mineRequest / payroll relayer vs CMS pod-inbox-relay) both map
-          // sourceContract ← originalSender. On current Inbox, callerContract == originalSender
-          // == msg.sender, so the collapse is correct; keep both aligned if those fields diverge.
-          sourceContract: request.originalSender,
-          targetContract: request.targetContract,
-          methodCall: request.methodCall,
-          callbackSelector: request.callbackSelector ?? "0x00000000",
-          errorSelector: request.errorSelector ?? "0x00000000",
-          isTwoWay: request.isTwoWay,
-          sourceRequestId: request.sourceRequestId,
-          targetFee: targetFeeForMine,
-          callerFee: request.callerFee,
         },
       ],
     ],

@@ -186,8 +186,11 @@ export default defineConfig({
       viaIR: true,
       optimizer: {
         enabled: true,
-        // Lower runs shrink deployment size (higher runtime gas). For Inbox ~29kB, try 1–200.
-        runs: 10,
+        // Match inbox package: minimize create size (Spurious Dragon 24_576).
+        runs: 1,
+      },
+      metadata: {
+        bytecodeHash: "none",
       },
     },
   },
