@@ -18,7 +18,7 @@ import {
   resolveDeployerAddress,
   waitMined,
 } from "../../scripts/deploy-utils.js";
-import { deployLinkedInbox } from "../../scripts/deploy-inbox-linked.js";
+import { deployLinkedInbox, mpcAbiReEncodeOf } from "../../scripts/deploy-inbox-linked.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { ONBOARD_CONTRACT_ADDRESS, Wallet as CotiWallet } from "@coti-io/coti-ethers";
 import { decryptUint, decryptUint256 as sdkDecryptUint256, prepareIT, prepareIT256 } from "@coti-io/coti-sdk-typescript";
@@ -204,7 +204,7 @@ export const logStep = (message: string) => {
  * Deploy the (constructor-arg-free) {Inbox} and run its one-time {Inbox.init} initializer,
  * setting `chainId` and keeping ownership with the deploying account. Mirrors the production
  * CreateX `deployCreate3AndInit` flow, but deploys directly since CreateX is not present on the
- * in-process EDR test network. Links {MpcAbiCodec} (required for mainnet-sized Inbox bytecode).
+ * in-process EDR test network. Deploys {MpcAbiReEncode} and passes it into init (COTI path).
  */
 export const deployInboxWithInit = async (
   hh: {
@@ -218,7 +218,7 @@ export const deployInboxWithInit = async (
   const owner: `0x${string}` =
     clientOpts?.client?.wallet?.account?.address ??
     (await hh.getWalletClients())[0].account.address;
-  await inbox.write.init([owner, chainId]);
+  await inbox.write.init([owner, chainId, mpcAbiReEncodeOf(inbox)]);
   return inbox;
 };
 
