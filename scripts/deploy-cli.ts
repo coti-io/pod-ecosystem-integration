@@ -5,6 +5,7 @@ import type { Address, PublicClient, WalletClient } from "viem";
 import { encodeFunctionData, zeroAddress } from "viem";
 import {
   INBOX_SALT_LABEL,
+  MPC_ABI_REENCODE_SALT_LABEL,
   buildInboxSalt,
   computeGuardedSalt,
   precomputeCreate3Address,
@@ -115,6 +116,10 @@ type DeployCtx = {
   inboxAddress: Address;
   /** Salt label driving the deterministic Inbox address family (from deployConfig or default). */
   inboxSaltLabel: string;
+  /** COTI {MpcAbiReEncode} salt label (from deployConfig or default). */
+  mpcAbiCodecSaltLabel: string;
+  /** True when this network is a COTI role (needs re-encode helper). */
+  isCoti: boolean;
 };
 
 type Target = {
@@ -187,6 +192,12 @@ const readInboxSaltLabel = (cfg: any): string => {
   return typeof label === "string" && label.length > 0 ? label : INBOX_SALT_LABEL;
 };
 
+/** COTI-only {MpcAbiReEncode} CREATE3 salt label (independent of inboxSalt). */
+const readMpcAbiCodecSaltLabel = (cfg: any): string => {
+  const label = cfg?.mpcAbiCodecSalt?.label;
+  return typeof label === "string" && label.length > 0 ? label : MPC_ABI_REENCODE_SALT_LABEL;
+};
+
 /**
  * Persist the resolved Inbox salt back to `deployConfig.inboxSalt` so the deterministic
  * inputs are transparent and editable. The 32-byte `salt`/`guardedSalt`/`address` are
@@ -216,6 +227,30 @@ const recordInboxSalt = async (params: {
       typeof prev.runbook === "string" && prev.runbook.length > 0
         ? prev.runbook
         : "After inbox deploy: priceOracle (setInboxTokens → seed prices/feeds → refreshCache) → feeConfig (min-fee templates + gasPriceBounds) → wireInboxOracle. On non-EIP-1559 chains (COTI), gasPriceBounds are required.",
+  };
+  await writeCfg(cfg);
+};
+
+const recordMpcAbiCodecSalt = async (params: {
+  label: string;
+  deployer: Address;
+  salt: `0x${string}`;
+  guardedSalt: `0x${string}`;
+  address: Address;
+}): Promise<void> => {
+  const cfg = await readCfg();
+  const prev = (cfg.mpcAbiCodecSalt ?? {}) as Record<string, unknown>;
+  cfg.mpcAbiCodecSalt = {
+    ...prev,
+    label: params.label,
+    deployer: params.deployer,
+    salt: params.salt,
+    guardedSalt: params.guardedSalt,
+    address: params.address,
+    bytecodeNote:
+      typeof prev.bytecodeNote === "string" && prev.bytecodeNote.length > 0
+        ? prev.bytecodeNote
+        : "COTI only. CREATE3 {MpcAbiReEncode} DELEGATECALL target. Bump label (clear salt/address) when re-encode contract bytecode changes. Independent of inboxSalt.label.",
   };
   await writeCfg(cfg);
 };
@@ -379,6 +414,10 @@ const FEE_FIELDS = [
   "callbackExecutionGas",
   "errorLength",
   "bufferRatioX10000",
+  "maxMethodCallBytes",
+  "maxExecutionGas",
+  "gasPriceMul",
+  "gasPriceDiv",
 ] as const;
 type FeeTuple = Record<(typeof FEE_FIELDS)[number], bigint>;
 
@@ -391,6 +430,10 @@ const normalizeFee = (raw: any): FeeTuple => {
       callbackExecutionGas: BigInt(raw[2]),
       errorLength: BigInt(raw[3]),
       bufferRatioX10000: BigInt(raw[4]),
+      maxMethodCallBytes: BigInt(raw[5]),
+      maxExecutionGas: BigInt(raw[6]),
+      gasPriceMul: BigInt(raw[7] ?? 1),
+      gasPriceDiv: BigInt(raw[8] ?? 1),
     };
   }
   return {
@@ -399,6 +442,10 @@ const normalizeFee = (raw: any): FeeTuple => {
     callbackExecutionGas: BigInt(raw.callbackExecutionGas),
     errorLength: BigInt(raw.errorLength),
     bufferRatioX10000: BigInt(raw.bufferRatioX10000),
+    maxMethodCallBytes: BigInt(raw.maxMethodCallBytes),
+    maxExecutionGas: BigInt(raw.maxExecutionGas),
+    gasPriceMul: BigInt(raw.gasPriceMul ?? 1),
+    gasPriceDiv: BigInt(raw.gasPriceDiv ?? 1),
   };
 };
 
@@ -734,12 +781,26 @@ const TARGETS: Target[] = [
     resolveAddress: (ctx) => ctx.inboxAddress,
     deploy: async (ctx) => {
       const roles = chainRoles(ctx);
-      const { inbox, alreadyDeployed } = await deployDeterministicInbox({
+      const codecLabel = ctx.mpcAbiCodecSaltLabel;
+      const { inbox, alreadyDeployed, mpcAbiReEncode } = await deployDeterministicInbox({
         viem: ctx.viem,
         publicClient: ctx.publicClient,
         walletClient: ctx.walletClient,
         saltLabel: ctx.inboxSaltLabel,
+        deployReEncode: ctx.isCoti,
+        reEncodeSaltLabel: ctx.isCoti ? codecLabel : undefined,
       });
+      if (ctx.isCoti && mpcAbiReEncode && mpcAbiReEncode !== zeroAddress) {
+        const codecSalt = buildInboxSalt(ctx.deployer, codecLabel);
+        await recordMpcAbiCodecSalt({
+          label: codecLabel,
+          deployer: ctx.deployer,
+          salt: codecSalt,
+          guardedSalt: computeGuardedSalt(ctx.deployer, codecSalt),
+          address: mpcAbiReEncode,
+        });
+        console.log(`  mpcAbiReEncode ${mpcAbiReEncode} (salt label ${codecLabel})`);
+      }
       for (const miner of roles.inbox.miners) {
         const added = await ensureMinerRegistered({
           inbox,
@@ -1759,6 +1820,7 @@ const main = async () => {
   const { chainId, publicClient, walletClient } = await getViemClients(viem, provider, networkName);
   const deployer = await resolveDeployerAddress(walletClient);
   const inboxSaltLabel = readInboxSaltLabel(await readCfg());
+  const mpcAbiCodecSaltLabel = readMpcAbiCodecSaltLabel(await readCfg());
   const inboxSalt = buildInboxSalt(deployer, inboxSaltLabel);
   const inboxAddress = await precomputeCreate3Address(publicClient, deployer, inboxSalt);
   // Keep deployConfig.inboxSalt in sync with the resolved deterministic inputs.
@@ -1778,6 +1840,20 @@ const main = async () => {
     console.log(`Runbook: ${saltMeta.runbook}`);
   }
 
+  const isCoti = net.role === "coti";
+  if (isCoti) {
+    const codecSalt = buildInboxSalt(deployer, mpcAbiCodecSaltLabel);
+    const codecAddress = await precomputeCreate3Address(publicClient, deployer, codecSalt);
+    await recordMpcAbiCodecSalt({
+      label: mpcAbiCodecSaltLabel,
+      deployer,
+      salt: codecSalt,
+      guardedSalt: computeGuardedSalt(deployer, codecSalt),
+      address: codecAddress,
+    });
+    console.log(`MpcAbiReEncode CREATE3 (COTI): ${codecAddress} (label ${mpcAbiCodecSaltLabel})`);
+  }
+
   const ctx: DeployCtx = {
     viem,
     publicClient,
@@ -1787,6 +1863,8 @@ const main = async () => {
     deployer,
     inboxAddress,
     inboxSaltLabel,
+    mpcAbiCodecSaltLabel,
+    isCoti,
   };
 
   await printSessionBanner(ctx, net.label);

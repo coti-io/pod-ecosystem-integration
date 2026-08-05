@@ -19,6 +19,7 @@ export type DeployConfigForks = {
 export type DeployConfig = {
   forks?: DeployConfigForks;
   inboxSalt?: Record<string, unknown>;
+  mpcAbiCodecSalt?: Record<string, unknown>;
   roles?: Record<string, unknown>;
   chains?: Record<string, any>;
   [key: string]: unknown;

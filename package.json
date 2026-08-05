@@ -31,6 +31,8 @@
     "test:pod-token": "COTI_BACKEND=sim POD_TOKEN_SYSTEM_TESTS=1 hardhat test test/tokens/pod-token.ts",
     "test:pod-token-late-onboard": "POD_TOKEN_LATE_ONBOARD_TESTS=1 hardhat test test/tokens/pod-token-late-onboard.ts",
     "investigate:offboard-to-user": "OFFBOARD_TO_USER_INVESTIGATION=1 hardhat test test/tokens/offboard-to-user-investigation.ts",
+    "test:inbox-estimate-gas": "COTI_BACKEND=sim INBOX_ESTIMATE_GAS_SYSTEM_TESTS=1 hardhat test test/system/inbox-execution-gas-estimate.ts",
+    "test:inbox-mine-gas": "COTI_BACKEND=sim INBOX_MINE_GAS_SYSTEM_TESTS=1 hardhat test test/inbox-mine-gas-algo.ts test/system/inbox-mine-gas-plan.ts",
     "test:pp-system": "COTI_BACKEND=sim PP_SYSTEM_TESTS=1 hardhat test test/privacy/privacy-portal-system.ts",
     "test:pp-remount": "COTI_BACKEND=sim PP_REMOUNT_SYSTEM_TESTS=1 hardhat test test/privacy/privacy-portal-remount-system.ts",
     "test:pp-mainnet-smoke": "DEPLOY_CONFIG=deployConfig.mainnet.yaml PP_MAINNET_SMOKE=1 hardhat test test/privacy/privacy-portal-mainnet-smoke.ts",
@@ -40,7 +42,8 @@
     "demo:erc7984-sepolia": "hardhat run scripts/erc7984/run-sepolia-demo.ts --network sepolia",
     "demo:erc7984-dummy-sepolia": "hardhat run scripts/erc7984/run-dummy-explorer-demo.ts --network sepolia",
     "verify:deployments": "hardhat compile && node --import tsx scripts/verify-deployments.ts",
-    "verify:deployments:config": "hardhat compile && node --import tsx scripts/verify-deployments.ts --config-only"
+    "verify:deployments:config": "hardhat compile && node --import tsx scripts/verify-deployments.ts --config-only",
+    "test:mpc-abi-reencode-delegate-coti": "hardhat test test/system/mpc-abi-reencode-delegate-coti.ts"
   },
   "devDependencies": {
     "@coti-io/coti-ethers": "^1.0.5",

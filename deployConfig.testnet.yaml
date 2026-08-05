@@ -14,6 +14,11 @@ inboxSalt:
     changes before redeploying.'
   runbook: 'After inbox deploy: priceOracle (setInboxTokens → seed prices/feeds → refreshCache) → feeConfig (min-fee
     templates + gasPriceBounds) → wireInboxOracle. On non-EIP-1559 chains (COTI), gasPriceBounds are required.'
+mpcAbiCodecSalt:
+  label: 'pod.mpc-abi-reencode.v1.0'
+  deployer: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  bytecodeNote: 'COTI only. CREATE3 MpcAbiReEncode (Inbox DELEGATECALL target). Bump label independently of
+    inboxSalt when re-encode contract bytecode changes. Non-COTI Inbox init uses address(0).'
 roles:
   owner: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   miners:
@@ -58,12 +63,20 @@ chains:
         callbackExecutionGas: '100000'
         errorLength: '300'
         bufferRatioX10000: '5000'
+        maxMethodCallBytes: '8192'
+        maxExecutionGas: '5000000'
+        gasPriceMul: '1'
+        gasPriceDiv: '1'
       remote:
         constantFee: '12000000'
         gasPerByte: '0'
         callbackExecutionGas: '0'
         errorLength: '0'
         bufferRatioX10000: '0'
+        maxMethodCallBytes: '8192'
+        maxExecutionGas: '12000000'
+        gasPriceMul: '1'
+        gasPriceDiv: '1'
     portalFee:
       deposit:
         fixedFee: '0'
@@ -111,12 +124,20 @@ chains:
         callbackExecutionGas: '100000'
         errorLength: '300'
         bufferRatioX10000: '5000'
+        maxMethodCallBytes: '8192'
+        maxExecutionGas: '5000000'
+        gasPriceMul: '1'
+        gasPriceDiv: '1'
       remote:
         constantFee: '12000000'
         gasPerByte: '0'
         callbackExecutionGas: '0'
         errorLength: '0'
         bufferRatioX10000: '0'
+        maxMethodCallBytes: '8192'
+        maxExecutionGas: '12000000'
+        gasPriceMul: '1'
+        gasPriceDiv: '1'
     portalFee:
       deposit:
         fixedFee: '10000000000000'
@@ -214,12 +235,20 @@ chains:
         callbackExecutionGas: '0'
         errorLength: '0'
         bufferRatioX10000: '0'
+        maxMethodCallBytes: '8192'
+        maxExecutionGas: '12000000'
+        gasPriceMul: '1'
+        gasPriceDiv: '1'
       remote:
         constantFee: '0'
         gasPerByte: '10'
         callbackExecutionGas: '100000'
         errorLength: '300'
         bufferRatioX10000: '5000'
+        maxMethodCallBytes: '8192'
+        maxExecutionGas: '5000000'
+        gasPriceMul: '1'
+        gasPriceDiv: '1'
     gasPriceBounds:
       minPriorityFeeWei: '0'
       minGasPriceWei: '2000000000'
@@ -312,12 +341,20 @@ chains:
         callbackExecutionGas: '100000'
         errorLength: '300'
         bufferRatioX10000: '5000'
+        maxMethodCallBytes: '8192'
+        maxExecutionGas: '5000000'
+        gasPriceMul: '1'
+        gasPriceDiv: '1'
       remote:
         constantFee: '12000000'
         gasPerByte: '0'
         callbackExecutionGas: '0'
         errorLength: '0'
         bufferRatioX10000: '0'
+        maxMethodCallBytes: '8192'
+        maxExecutionGas: '12000000'
+        gasPriceMul: '1'
+        gasPriceDiv: '1'
     portalFee:
       deposit:
         fixedFee: '10000000000000'
