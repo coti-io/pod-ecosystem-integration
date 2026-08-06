@@ -4,8 +4,6 @@ import { network } from "hardhat";
 import type { Address, PublicClient, WalletClient } from "viem";
 import { encodeFunctionData, zeroAddress } from "viem";
 import {
-  INBOX_SALT_LABEL,
-  MPC_ABI_REENCODE_SALT_LABEL,
   buildInboxSalt,
   computeGuardedSalt,
   precomputeCreate3Address,
@@ -189,13 +187,19 @@ const printSessionBanner = async (ctx: DeployCtx, netLabel: string): Promise<voi
 /** Salt label that drives the deterministic Inbox address family (chain-independent). */
 const readInboxSaltLabel = (cfg: any): string => {
   const label = cfg?.inboxSalt?.label;
-  return typeof label === "string" && label.length > 0 ? label : INBOX_SALT_LABEL;
+  if (typeof label !== "string" || label.length === 0) {
+    throw new Error("deployConfig.inboxSalt.label is required (SoT for CREATE3 address family)");
+  }
+  return label;
 };
 
 /** COTI-only {MpcAbiReEncode} CREATE3 salt label (independent of inboxSalt). */
 const readMpcAbiCodecSaltLabel = (cfg: any): string => {
   const label = cfg?.mpcAbiCodecSalt?.label;
-  return typeof label === "string" && label.length > 0 ? label : MPC_ABI_REENCODE_SALT_LABEL;
+  if (typeof label !== "string" || label.length === 0) {
+    throw new Error("deployConfig.mpcAbiCodecSalt.label is required on COTI (SoT; no code default)");
+  }
+  return label;
 };
 
 /**

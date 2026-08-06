@@ -15,11 +15,9 @@ import {
 import {
   deployCreate3Deterministic,
   deployInboxDeterministic as deployInboxViaCreateX,
-  MPC_ABI_REENCODE_SALT_LABEL,
   type DeployInboxDeterministicResult,
   type InboxArtifact,
 } from "./createx.js";
-import { type LinkReferences } from "./link-inbox-bytecode.js";
 import { MANUAL_USD_PEG_18, usdcUnderlyingForChain } from "./privacyPortal/oracle-pegs.js";
 import { canonicalUnderlying } from "./privacyPortal/canonical-collateral.js";
 import {
@@ -207,6 +205,8 @@ export const oracleAdapterType = (oracleConfig?: OracleConfigJson): OracleAdapte
 };
 
 type DeployConfig = {
+  inboxSalt?: { label?: string; [key: string]: unknown };
+  mpcAbiCodecSalt?: { label?: string; [key: string]: unknown };
   /**
    * Global role intent for every chain/contract.
    * Same owner / miners / operators apply network-wide for consistency.
@@ -919,7 +919,7 @@ export const readGasPriceBoundsForChainSync = (chainId: number): GasPriceBoundsT
 export const formatGasPriceBounds = (t: GasPriceBoundsTuple): string =>
   `priority=${t.minPriorityFeeWei} min=${t.minGasPriceWei} max=${t.maxGasPriceWei === 0n ? "none" : t.maxGasPriceWei}`;
 
-/** Read on-chain gas-price bounds from an inbox that exposes the POD-07 getters. */
+/** Read on-chain gas-price bounds from an inbox that exposes the bound getters. */
 export const readInboxGasPriceBounds = async (inbox: {
   read: {
     minPriorityFeeWei: () => Promise<bigint>;
@@ -1571,21 +1571,26 @@ export const deployAndWireTestnetPriceOracle = async (
 type InboxArtifactJson = {
   abi: InboxArtifact["abi"];
   bytecode?: string;
-  linkReferences?: LinkReferences;
+  linkReferences?: Record<string, unknown>;
 };
 
-/** Load the compiled `Inbox` artifact (abi + creation bytecode + library link refs) from disk. */
-export const readInboxArtifact = async (): Promise<InboxArtifact & { linkReferences: LinkReferences }> => {
+/** Load the compiled `Inbox` artifact (abi + creation bytecode) from disk. */
+export const readInboxArtifact = async (): Promise<InboxArtifact> => {
   const artifactPath = path.resolve(process.cwd(), "artifacts/contracts/Inbox.sol/Inbox.json");
   const raw = await fs.readFile(artifactPath, "utf8");
   const json = JSON.parse(raw) as InboxArtifactJson;
   if (!json.bytecode || !json.bytecode.startsWith("0x")) {
     throw new Error("readInboxArtifact: missing/invalid bytecode (run `npx hardhat compile` first)");
   }
+  if (json.linkReferences && Object.keys(json.linkReferences).length > 0) {
+    throw new Error("readInboxArtifact: unexpected solc linkReferences (Inbox must not use linked libraries)");
+  }
+  if (json.bytecode.includes("_")) {
+    throw new Error("readInboxArtifact: bytecode still has library placeholders");
+  }
   return {
     abi: json.abi,
     bytecode: json.bytecode as `0x${string}`,
-    linkReferences: json.linkReferences ?? {},
   };
 };
 
@@ -1603,10 +1608,11 @@ export const deployDeterministicInbox = async (params: {
   };
   publicClient: PublicClient;
   walletClient: WalletClient;
-  /** Salt label driving the deterministic address family; defaults to the createx constant. */
-  saltLabel?: string;
+  /** Salt label from deployConfig (`inboxSalt.label`). Required for CREATE3. */
+  saltLabel: string;
   /** When true / salt label set, CREATE3-deploy {MpcAbiReEncode} and pass into Inbox.init. */
   deployReEncode?: boolean;
+  /** From deployConfig (`mpcAbiCodecSalt.label`). Required when deployReEncode. */
   reEncodeSaltLabel?: string;
 }): Promise<
   DeployInboxDeterministicResult & {
@@ -1618,6 +1624,11 @@ export const deployDeterministicInbox = async (params: {
   const deployer = await resolveDeployerAddress(params.walletClient);
   let mpcAbiReEncode: Address = zeroAddress;
   if (params.deployReEncode || params.reEncodeSaltLabel) {
+    if (!params.reEncodeSaltLabel?.trim()) {
+      throw new Error(
+        "deployDeterministicInbox: reEncodeSaltLabel required (deployConfig.mpcAbiCodecSalt.label)"
+      );
+    }
     const reEncodePathCandidates = [
       path.resolve(process.cwd(), "artifacts/contracts/MpcAbiReEncode.sol/MpcAbiReEncode.json"),
       path.resolve(
@@ -1645,18 +1656,12 @@ export const deployDeterministicInbox = async (params: {
       walletClient: params.walletClient,
       deployer,
       bytecode,
-      saltLabel: params.reEncodeSaltLabel ?? MPC_ABI_REENCODE_SALT_LABEL,
+      saltLabel: params.reEncodeSaltLabel,
     });
     mpcAbiReEncode = getAddress(codecDeploy.address);
   }
 
-  const unlinked = await readInboxArtifact();
-  if (Object.keys(unlinked.linkReferences).length > 0) {
-    throw new Error(
-      "deployDeterministicInbox: Inbox still has linkReferences; expected no solc library links"
-    );
-  }
-  const artifact: InboxArtifact = { abi: unlinked.abi, bytecode: unlinked.bytecode };
+  const artifact = await readInboxArtifact();
 
   const result = await deployInboxViaCreateX({
     publicClient: params.publicClient,
@@ -1720,6 +1725,23 @@ export const appendDeploymentLog = async (entry: DeploymentLogEntry) => {
     ...entry,
   };
   await fs.appendFile(logPath, `${JSON.stringify(payload)}\n`, "utf8");
+};
+
+
+/** Resolve CREATE3 salt label: deployConfig field, else env. Never a code constant. */
+export const requireSaltLabel = (params: {
+  fromConfig?: unknown;
+  envKey: string;
+  configPath: string;
+}): string => {
+  if (typeof params.fromConfig === "string" && params.fromConfig.trim().length > 0) {
+    return params.fromConfig.trim();
+  }
+  const fromEnv = process.env[params.envKey]?.trim();
+  if (fromEnv) return fromEnv;
+  throw new Error(
+    `${params.configPath} (or env ${params.envKey}) is required — salt labels live in deployConfig, not code`
+  );
 };
 
 export const readDeployConfig = async (): Promise<DeployConfig> =>
