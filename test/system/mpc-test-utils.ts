@@ -18,7 +18,7 @@ import {
   resolveDeployerAddress,
   waitMined,
 } from "../../scripts/deploy-utils.js";
-import { deployLinkedInbox, mpcAbiReEncodeOf } from "../../scripts/deploy-inbox-linked.js";
+import { deployTestInbox, mpcAbiReEncodeOf } from "../../scripts/deploy-test-inbox.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { ONBOARD_CONTRACT_ADDRESS, Wallet as CotiWallet } from "@coti-io/coti-ethers";
 import { decryptUint, decryptUint256 as sdkDecryptUint256, prepareIT, prepareIT256 } from "@coti-io/coti-sdk-typescript";
@@ -214,7 +214,7 @@ export const deployInboxWithInit = async (
   chainId: bigint,
   clientOpts?: any
 ): Promise<any> => {
-  const inbox = await deployLinkedInbox(hh, clientOpts);
+  const inbox = await deployTestInbox(hh, clientOpts);
   const owner: `0x${string}` =
     clientOpts?.client?.wallet?.account?.address ??
     (await hh.getWalletClients())[0].account.address;
@@ -384,7 +384,7 @@ export async function ensureMpcInboxOracleAndFees(params: {
     walletClient,
   });
 
-  // Pin fee→gas conversion to the same assumed price used by {@link estimateGas} (POD-07).
+  // Pin fee→gas conversion to the same assumed price used by {@link estimateGas}.
   // Without this, Hardhat basefee / minGasPriceWei floors shrink gas-unit budgets and trip CallbackFeeTooLow.
   const boundsHash = await inbox.write.setGasPriceBounds(
     [0n, BigInt(MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI), BigInt(MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI)],
@@ -488,7 +488,7 @@ export const HARDHAT_EDR_TX_GAS_CAP = 16_777_216n;
 /** viem `writeContract` options attaching the two-way native payment from {@link estimateGas}. */
 export function podTwoWayWriteOptions(fees: PodTwoWayFeeEstimate): { value: bigint; gas: bigint } {
   // Small pad absorbs Hardhat base-fee drift between setup-time estimate and later sends.
-  // Explicit gas: Hardhat EDR eth_estimateGas can under-estimate PoD two-way sends after POD-07 fee bounds.
+  // Explicit gas: Hardhat EDR eth_estimateGas can under-estimate PoD two-way sends after fee bounds.
   return {
     value: fees.totalValueWei + fees.totalValueWei / 20n,
     gas: 8_000_000n,
@@ -728,7 +728,7 @@ export function toMinedRequest(request: Request, targetFeeOverride?: bigint): Mi
   };
 }
 
-/** ABI fragment for C-04 always-revert estimate. */
+/** ABI fragment for always-revert execution-gas estimate. */
 export const EXECUTION_GAS_ESTIMATE_ERROR_ABI = [
   {
     type: "error",
@@ -809,7 +809,7 @@ export function parseExecutionGasEstimate(error: unknown): ExecutionGasEstimateR
 }
 
 /**
- * C-04 public preflight: `eth_call` / simulate `estimateExecutionGasForMiner` and decode the
+ * Public preflight: `eth_call` / simulate `estimateExecutionGasForMiner` and decode the
  * always-revert {@link ExecutionGasEstimateResult}. Does not persist state.
  */
 export async function callEstimateExecutionGasForMiner(params: {

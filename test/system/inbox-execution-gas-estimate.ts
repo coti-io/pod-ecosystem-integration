@@ -1,6 +1,6 @@
 /**
  * Dual-chain (in-memory Hardhat + simCoti) e2e for:
- *   FeeConfig.gasPriceMul / gasPriceDiv skewing prepaid remote targetFee
+ *   FeeConfig.gasPriceMul / gasPriceDiv skewing prepaid targetFee + callerFee
  *   Public always-revert estimateExecutionGasForMiner before mining
  *
  * Run: `npm run test:inbox-estimate-gas` (sets INBOX_ESTIMATE_GAS_SYSTEM_TESTS=1 and COTI_BACKEND=sim).
@@ -59,6 +59,40 @@ const REMOTE_FEE: SystemInboxFeeConfig = {
   maxExecutionGas: 5_000_000n,
 };
 
+/**
+ * Must match `MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI` / `setGasPriceBounds` pin in mpc-test-utils
+ * (min=max → `_referenceGasPrice` is this value).
+ */
+const PINNED_GAS_PRICE_WEI = 2_000_000_000n;
+
+/** Fixed two-way payment so expected gas units are exact under 1/1 oracle + pinned gas price.
+ * Remote base = 2e6 gas → mul=2 still ≤ maxExecutionGas 5e6; after div=2 still ≥ remote constant 1e6.
+ */
+const SKEW_TOTAL_WEI = 8_000_000_000_000_000n; // 0.008 ETH
+const SKEW_CALLBACK_WEI = 4_000_000_000_000_000n; // 0.004 ETH → remote slice 0.004 ETH
+
+/**
+ * Mirror `validateAndPrepareTwoWayFees` with 1/1 oracle (OpenZeppelin `mulDiv` truncates).
+ * `local` skew → `callerFee`; `remote` skew → `targetFee`.
+ */
+function expectedTwoWayGasUnits(params: {
+  totalWei: bigint;
+  callbackWei: bigint;
+  gasPrice: bigint;
+  localMul: bigint;
+  localDiv: bigint;
+  remoteMul: bigint;
+  remoteDiv: bigint;
+}): { targetFee: bigint; callerFee: bigint } {
+  const { totalWei, callbackWei, gasPrice, localMul, localDiv, remoteMul, remoteDiv } = params;
+  const callerBase = callbackWei / gasPrice;
+  const remoteBase = (totalWei - callbackWei) / gasPrice;
+  return {
+    callerFee: (callerBase * localMul) / localDiv,
+    targetFee: (remoteBase * remoteMul) / remoteDiv,
+  };
+}
+
 const emptyMethodCall = {
   selector: "0x00000000" as const,
   data: "0x" as const,
@@ -86,9 +120,10 @@ async function configureEstimateFees(params: {
   ctx: TestContext;
   sepoliaViem: any;
   cotiViem: any;
+  local?: Partial<SystemInboxFeeConfig>;
   remote?: Partial<SystemInboxFeeConfig>;
 }) {
-  const { label, ctx, sepoliaViem, cotiViem, remote } = params;
+  const { label, ctx, sepoliaViem, cotiViem, local, remote } = params;
   await pegInboxOracleUsd1to1({
     label: `${label} hardhat`,
     viem: sepoliaViem,
@@ -108,7 +143,7 @@ async function configureEstimateFees(params: {
     inbox: ctx.contracts.inboxSepolia,
     publicClient: ctx.sepolia.publicClient,
     walletClient: ctx.sepolia.wallet,
-    local: { ...FLAT_FEE },
+    local: { ...FLAT_FEE, ...local },
     remote: { ...REMOTE_FEE, ...remote },
   });
   // Destination must admit respond()/raise return-leg creates during estimate + mine.
@@ -120,6 +155,13 @@ async function configureEstimateFees(params: {
     local: { ...FLAT_FEE },
     remote: { ...REMOTE_FEE },
   });
+  // Keep reference gas pinned after fee retunes (same as ensureMpcInboxOracleAndFees).
+  const deployer = ctx.sepolia.wallet.account.address as `0x${string}`;
+  const boundsHash = await ctx.contracts.inboxSepolia.write.setGasPriceBounds(
+    [0n, PINNED_GAS_PRICE_WEI, PINNED_GAS_PRICE_WEI],
+    { account: deployer }
+  );
+  await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: boundsHash, ...receiptWaitOptions });
   ctx.podTwoWayFees = await estimateGas(ctx.contracts.inboxSepolia);
 }
 
@@ -178,55 +220,103 @@ d("Inbox execution gas estimate + gasPrice fee skew (system)", { concurrency: 1 
     step(`EstimateGasTarget=${estTarget.address} nonMiner=${nonMiner}`);
   });
 
-  it("remote gasPriceMul=2 doubles prepaid targetFee for the same msg.value", async function () {
-    step("peg oracle 1/1 and set flat fees (mul/div = 1/1)");
-    await configureEstimateFees({ label: "fee-skew baseline", ctx, sepoliaViem, cotiViem });
-    const fees = podTwoWayWriteOptions(ctx.podTwoWayFees);
+  it("gasPriceMul/Div skew: exact targetFee + callerFee for target-higher and source-higher", async function () {
     const deployer = ctx.sepolia.wallet.account.address as `0x${string}`;
+    const cases: Array<{
+      name: string;
+      localMul: bigint;
+      localDiv: bigint;
+      remoteMul: bigint;
+      remoteDiv: bigint;
+    }> = [
+      {
+        name: "baseline 1/1 both legs",
+        localMul: 1n,
+        localDiv: 1n,
+        remoteMul: 1n,
+        remoteDiv: 1n,
+      },
+      {
+        name: "target gasPrice higher (remote mul=2)",
+        localMul: 1n,
+        localDiv: 1n,
+        remoteMul: 2n,
+        remoteDiv: 1n,
+      },
+      {
+        name: "target gasPrice lower / source higher (remote div=2)",
+        localMul: 1n,
+        localDiv: 1n,
+        remoteMul: 1n,
+        remoteDiv: 2n,
+      },
+      {
+        name: "callback/source gasPrice higher (local mul=2)",
+        localMul: 2n,
+        localDiv: 1n,
+        remoteMul: 1n,
+        remoteDiv: 1n,
+      },
+      {
+        name: "callback/source gasPrice lower (local div=2)",
+        localMul: 1n,
+        localDiv: 2n,
+        remoteMul: 1n,
+        remoteDiv: 1n,
+      },
+      {
+        name: "both legs skewed (remote 3/2, local 2/3)",
+        localMul: 2n,
+        localDiv: 3n,
+        remoteMul: 3n,
+        remoteDiv: 2n,
+      },
+    ];
 
-    step("send two-way #1 at mul=1 → record targetFee");
-    const hash1 = await ctx.contracts.inboxSepolia.write.sendTwoWayMessage(
-      [
-        BigInt(ctx.chainIds.coti),
-        deployer,
-        emptyMethodCall,
-        "0x12345678",
-        "0x87654321",
-        ctx.podTwoWayFees.callbackFeeWei,
-      ],
-      { ...fees, account: deployer }
-    );
-    await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: hash1, ...receiptWaitOptions });
-    const baseTarget = (await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti)).targetFee;
-    step(`baseline targetFee (gas units) = ${baseTarget}`);
-    assert.ok(baseTarget > 0n);
+    for (const c of cases) {
+      step(`configure ${c.name}`);
+      await configureEstimateFees({
+        label: `skew ${c.name}`,
+        ctx,
+        sepoliaViem,
+        cotiViem,
+        local: { gasPriceMul: c.localMul, gasPriceDiv: c.localDiv },
+        remote: { gasPriceMul: c.remoteMul, gasPriceDiv: c.remoteDiv },
+      });
 
-    step("retune remote gasPriceMul=2 (same wei payment next)");
-    await applySystemInboxMinFeeConfigs({
-      label: "fee-skew mul=2",
-      inbox: ctx.contracts.inboxSepolia,
-      publicClient: ctx.sepolia.publicClient,
-      walletClient: ctx.sepolia.wallet,
-      local: { ...FLAT_FEE },
-      remote: { ...REMOTE_FEE, gasPriceMul: 2n, gasPriceDiv: 1n },
-    });
+      const expected = expectedTwoWayGasUnits({
+        totalWei: SKEW_TOTAL_WEI,
+        callbackWei: SKEW_CALLBACK_WEI,
+        gasPrice: PINNED_GAS_PRICE_WEI,
+        localMul: c.localMul,
+        localDiv: c.localDiv,
+        remoteMul: c.remoteMul,
+        remoteDiv: c.remoteDiv,
+      });
+      step(
+        `${c.name}: expect targetFee=${expected.targetFee} callerFee=${expected.callerFee} ` +
+          `(remote ${c.remoteMul}/${c.remoteDiv}, local ${c.localMul}/${c.localDiv})`
+      );
+      assert.ok(expected.targetFee >= REMOTE_FEE.constantFee, "fixture must clear remote min after skew");
+      assert.ok(expected.callerFee >= FLAT_FEE.constantFee, "fixture must clear local min after skew");
 
-    step("send two-way #2 with identical msg.value");
-    const hash2 = await ctx.contracts.inboxSepolia.write.sendTwoWayMessage(
-      [
-        BigInt(ctx.chainIds.coti),
-        deployer,
-        emptyMethodCall,
-        "0x12345678",
-        "0x87654321",
-        ctx.podTwoWayFees.callbackFeeWei,
-      ],
-      { ...fees, account: deployer }
-    );
-    await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: hash2, ...receiptWaitOptions });
-    const skewedTarget = (await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti)).targetFee;
-    step(`skewed targetFee (gas units) = ${skewedTarget}`);
-    assert.equal(skewedTarget, baseTarget * 2n, "mul=2 must double remote prepaid gas units");
+      const hash = await ctx.contracts.inboxSepolia.write.sendTwoWayMessage(
+        [
+          BigInt(ctx.chainIds.coti),
+          deployer,
+          emptyMethodCall,
+          "0x12345678",
+          "0x87654321",
+          SKEW_CALLBACK_WEI,
+        ],
+        { account: deployer, value: SKEW_TOTAL_WEI, gas: 8_000_000n }
+      );
+      await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
+      const req = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
+      step(`${c.name}: stored targetFee=${req.targetFee} callerFee=${req.callerFee}`);
+      assert.equal(req.targetFee, expected.targetFee, `${c.name}: targetFee (remote skew)`);
+      assert.equal(req.callerFee, expected.callerFee, `${c.name}: callerFee (local/callback skew)`);
+    }
   });
 
   it("gasPriceMul=0 is rejected (FeeConfigInvalid)", async function () {
