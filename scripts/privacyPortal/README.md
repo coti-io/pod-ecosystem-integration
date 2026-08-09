@@ -194,6 +194,8 @@ The deploy-cli now pre-checks balance and reports `Insufficient native balance f
 
 Deploy the full token pair (mother registration is automatic via factory):
 
+**Do not enable deposits until mother `TokenRegistered` is confirmed.** `createPortal` returns after submitting the one-way registration message; early deposits can stick Pending.
+
 ```bash
 UNDERLYING_TOKEN=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 \
 PTOKEN_NAME="Private USDC" \

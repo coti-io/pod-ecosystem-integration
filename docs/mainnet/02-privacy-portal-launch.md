@@ -18,7 +18,10 @@ sequenceDiagram
   Ops->>COTI: Allowlist / register factory on mother
   Ops->>SRC: Per-token underlying + createPortal
   Ops->>COTI: Mother registration completes (miners)
+  Note over Ops,SRC: Do not enable deposits until mother TokenRegistered
 ```
+
+**Registration footgun:** `createPortal` returns as soon as the one-way mother registration message is *submitted*, not when the mother has registered the pToken. Deposits before `TokenRegistered` can leave mint requests stuck Pending (`TokenNotRegistered` on COTI). Leave `isDepositEnabled=false` until registration is confirmed; use admin refund for any stuck Pending escrows.
 
 ### 1. COTI mother
 
