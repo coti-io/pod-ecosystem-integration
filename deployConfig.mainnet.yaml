@@ -76,13 +76,13 @@ chains:
         gasPriceMul: '1'
         gasPriceDiv: '1'
       remote:
-        constantFee: '12000000'
+        constantFee: '18553600'
         gasPerByte: '0'
         callbackExecutionGas: '0'
         errorLength: '0'
         bufferRatioX10000: '0'
         maxMethodCallBytes: '8192'
-        maxExecutionGas: '12000000'
+        maxExecutionGas: '18553600'
         gasPriceMul: '1'
         gasPriceDiv: '1'
     portalFee:
@@ -159,13 +159,13 @@ chains:
         gasPriceMul: '1'
         gasPriceDiv: '1'
       remote:
-        constantFee: '12000000'
+        constantFee: '18553600'
         gasPerByte: '0'
         callbackExecutionGas: '0'
         errorLength: '0'
         bufferRatioX10000: '0'
         maxMethodCallBytes: '8192'
-        maxExecutionGas: '12000000'
+        maxExecutionGas: '18553600'
         gasPriceMul: '1'
         gasPriceDiv: '1'
     portalFee:
@@ -229,13 +229,13 @@ chains:
         privacyPortalFactory: ''
     feeConfig:
       local:
-        constantFee: '12000000'
+        constantFee: '18553600'
         gasPerByte: '0'
         callbackExecutionGas: '0'
         errorLength: '0'
         bufferRatioX10000: '0'
         maxMethodCallBytes: '8192'
-        maxExecutionGas: '12000000'
+        maxExecutionGas: '18553600'
         gasPriceMul: '1'
         gasPriceDiv: '1'
       remote:
