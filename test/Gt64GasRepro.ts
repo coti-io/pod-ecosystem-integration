@@ -90,6 +90,16 @@ if (!canRunCoti) {
         ...deployOpts,
       } as any);
 
+      const peerChainId = 11155111n;
+      await mockInbox.write.setContext([peerChainId, deployer, "0x" + "00".repeat(32)], {
+        account,
+        ...outerGasOpt,
+      });
+      await executor.write.setTrustedRemote([peerChainId, deployer], {
+        account,
+        ...outerGasOpt,
+      });
+
       const inboxAddr = getAddress(mockInbox.address);
 
       let hash: `0x${string}`;
