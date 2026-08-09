@@ -4,6 +4,8 @@ Operational runbook for upgrading a **Privacy Portal** clone while keeping the s
 
 Canonical code (sibling [coti-contracts](../../coti-contracts)): `PrivacyPortalFactory.createPortalWithExistingPToken`, `PrivacyPortal.retireDepositsForUpgrade`, `PodErc20Mintable.setMinter`.
 
+Related: [PORTAL_PAUSE_RESCUE_RUNBOOK.md](./PORTAL_PAUSE_RESCUE_RUNBOOK.md) for custodial pause → in-flight withdraw → full pause → sized rescue.
+
 ## Goals
 
 - Upgrade portal logic (new implementation) without replacing the pToken or re-registering on the mother.
