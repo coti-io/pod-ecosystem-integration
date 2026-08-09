@@ -260,7 +260,7 @@ export const SYSTEM_INBOX_LOCAL_MIN_FEE: SystemInboxFeeConfig = {
   constantFee: 0n,
   gasPerByte: 10n,
   callbackExecutionGas: 100_000n,
-  errorLength: 300n,
+  errorLength: 256n,
   bufferRatioX10000: 100n,
   maxMethodCallBytes: 8192n,
   maxExecutionGas: 5_000_000n,
