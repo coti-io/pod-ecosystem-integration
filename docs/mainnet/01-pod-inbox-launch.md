@@ -85,17 +85,23 @@ oracle:
 oracle:
   adapter: band
   bandStdRef: "0x..."        # StdReference proxy
-  maxStaleness: 0            # 0 = use Band’s own expiry
+  maxStaleness: 0            # 0 = disable on-chain age check (prefer non-zero in prod)
   feeds:
     inboxLocal:
       bandBase: "ETH"        # or "AVAX"
-      bandQuote: "USD"
+      bandQuote: "USDC"      # pegged quote, not a pure USD index
     collateral:
       USDC: { pegUsd: "1" }
       WETH:
         bandBase: "ETH"
-        bandQuote: "USD"
+        bandQuote: "USDC"
 ```
+
+**maxStaleness:** `0` intentionally disables the on-chain age check (upstream Band/Chainlink validity may still apply). Prefer a non-zero value in production unless the feed already encodes expiry.
+
+**Band quotes:** default quote symbol is a **USDC/USDT-style peg**, not a pure USD index. Collateral fee math inherits that peg dependency.
+
+**Oracle health:** inbox fee sends stay fail-open on non-zero cache. Operators monitor `getPricesUSDWithMeta` / `getOracleHealth` and may run a refresh/alert bot (see pod-explorer oracle health docs).
 
 ### Manual / plain (typical on COTI)
 

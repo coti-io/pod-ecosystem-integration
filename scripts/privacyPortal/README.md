@@ -18,6 +18,8 @@ Canonical address *hints* (optional) live in `canonical-collateral.ts`.
 
 **Oracle pricing:** `PoDPriceOracle` delegates live reads to a registered adapter (`ChainlinkLiveOracle` or `BandLiveOracle`). **Portal** calls `getLivePrices(nativeToken, underlying)` per tx; **inbox** uses cached legs refreshed by `refreshCache()`. Manual pegs (`setTokenPriceUSD`, inbox legs) are set at deploy — e.g. pUSDC **$1 USD peg**.
 
+`maxStaleness: 0` intentionally disables the adapter age check (prefer non-zero in production). Band quotes typically use a **USDC peg**, not a pure USD index. Ops: `getPricesUSDWithMeta` / `getOracleHealth` plus an explorer health bot — fee sends stay fail-open on non-zero cache.
+
 ### Oracle via `deploy:cli`
 
 Per-chain oracle settings live under `chains[chainId].oracle` in the deploy YAML (including `oracle.legs` for inbox/portal native tokens):
