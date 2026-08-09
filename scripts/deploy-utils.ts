@@ -1835,6 +1835,14 @@ type InboxArtifactJson = {
   linkReferences?: Record<string, unknown>;
 };
 
+/**
+ * Fully-qualified Inbox name. Hardhat compiles Inbox from
+ * `@coti-io/coti-pod-inbox-contracts` via npmFilesToBuild; bare `"Inbox"` is
+ * fragile if a local or test artifact shares the name.
+ */
+export const INBOX_FQN =
+  "@coti-io/coti-pod-inbox-contracts/contracts/Inbox.sol:Inbox" as const;
+
 /** Load the compiled `Inbox` artifact (abi + creation bytecode) from disk. */
 export const readInboxArtifact = async (): Promise<InboxArtifact> => {
   const artifactPath = path.resolve(
@@ -1976,7 +1984,7 @@ export const deployDeterministicInbox = async (params: {
     mpcAbiReEncode,
     feeManager,
   });
-  const inbox = await params.viem.getContractAt("Inbox", result.address, {
+  const inbox = await params.viem.getContractAt(INBOX_FQN, result.address, {
     client: { public: params.publicClient, wallet: params.walletClient },
   });
   // Defense in depth: createx already fail-closes, but re-check via the typed inbox reader.
