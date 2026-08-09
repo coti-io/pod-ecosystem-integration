@@ -20,6 +20,7 @@ import {
   deployOracleForChain,
   ensureMinerRegistered,
   getViemClients,
+  INBOX_FQN,
   oracleConfigFromChain,
   oracleAdapterType,
   bandStdRefForChain,
@@ -357,7 +358,7 @@ const ppFactoryVerifyArgs = (ctx: DeployCtx): string[] => {
 };
 
 const getInbox = (ctx: DeployCtx) =>
-  ctx.viem.getContractAt("Inbox", ctx.inboxAddress, {
+  ctx.viem.getContractAt(INBOX_FQN, ctx.inboxAddress, {
     client: { public: ctx.publicClient, wallet: ctx.walletClient },
   });
 
@@ -756,7 +757,7 @@ const buildPpTokenTargets = (): Target[] => {
         if (!isAddr(portal)) {
           // One-way mother registration fee: quote remote constant-fee floor in local wei.
           // Hardcoded 0.001 ETH over-credits remote gas vs maxExecutionGas (FeeGasTooHigh).
-          const inbox = await ctx.viem.getContractAt("Inbox", ctx.inboxAddress, {
+          const inbox = await ctx.viem.getContractAt(INBOX_FQN, ctx.inboxAddress, {
             client: { public: ctx.publicClient, wallet: ctx.walletClient },
           });
           const minGasPrice = (await inbox.read.minGasPriceWei()) as bigint;
