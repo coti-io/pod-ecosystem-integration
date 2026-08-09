@@ -80,7 +80,7 @@ Requires funded `PRIVATE_KEY` / `COTI_TESTNET_PRIVATE_KEY` registered as inbox m
 DEPLOY_CLI_NETWORK=sepolia DEPLOY_CLI_TARGETS=inbox,priceOracle,feeConfig,wireInboxOracle,ppPortalImpl,ppTokenImpl,ppPortalFactory,wireFactoryOracle,ppPortalFee npm run deploy:cli
 ```
 
-`gasPriceBounds` lives under `chains[chainId].gasPriceBounds`:
+`gasPriceBounds` lives under `chains[chainId].gasPriceBounds` and is **required** (deploy helpers refuse a silent fallback to inbox storage defaults):
 
 ```json
 "gasPriceBounds": {
@@ -90,7 +90,7 @@ DEPLOY_CLI_NETWORK=sepolia DEPLOY_CLI_TARGETS=inbox,priceOracle,feeConfig,wireIn
 }
 ```
 
-On COTI set a non-zero `maxGasPriceWei` (fee→gas uses clamped `tx.gasprice` when `basefee` is unavailable). See also `deployConfig.inboxSalt.bytecodeNote` / `runbook`.
+On COTI set a non-zero `maxGasPriceWei` (fee→gas uses clamped `tx.gasprice` when `basefee` is unavailable). EIP-1559 sources may keep `maxGasPriceWei: "0"` to disable the ceiling. See also `deployConfig.inboxSalt.bytecodeNote` / `runbook`.
 
 `portalFee` lives under `chains[chainId].portalFee` with `deposit` and `withdraw` legs, each `{ fixedFee, percentageBps, maxFee }` (native wei; `percentageBps` / 1_000_000). **PpPortalFee** compares on-chain factory defaults via `getFeeConfig` and calls `setDefaultDepositFee` / `setDefaultWithdrawFee` when they differ. Sign with the factory owner (`PRIVATE_KEY` / `FACTORY_OWNER`).
 

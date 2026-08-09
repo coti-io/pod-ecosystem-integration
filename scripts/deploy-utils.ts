@@ -455,7 +455,7 @@ export const readChainRoles = (chainId: number, deployer: `0x${string}`): Resolv
   readRoles(deployer, chainId);
 
 
-/** Contract defaults: floor = 2 gwei, no tip, no ceiling (EIP-1559 uses basefee + tip). */
+/** On-chain storage defaults (floor 2 gwei, no tip, no ceiling). Not a deploy fallback — set `chains[id].gasPriceBounds` explicitly. */
 export const DEFAULT_GAS_PRICE_BOUNDS: GasPriceBoundsTuple = {
   minPriorityFeeWei: 0n,
   minGasPriceWei: 2_000_000_000n,
@@ -483,11 +483,12 @@ export type OracleUsdLegs = { localUsd18: bigint; remoteUsd18: bigint };
 /** @deprecated Use {@link oracleUsdPricesForChain} */
 export type OracleLegs = OracleUsdLegs;
 
-/** Live COTI testnet (7082400) or in-process simCoti (7082401). */
+/** Live COTI testnet (7082400), simCoti (7082401), or COTI mainnet (2632500). */
 const isCotiFamilyChainId = (chainId: number): boolean => {
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
   const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "7082401");
-  return chainId === cotiTestnetId || chainId === simCotiId;
+  const cotiMainnetId = Number(process.env.COTI_MAINNET_CHAIN_ID || "2632500");
+  return chainId === cotiTestnetId || chainId === simCotiId || chainId === cotiMainnetId;
 };
 
 /**
@@ -958,33 +959,54 @@ export const gasPriceBoundsEq = (a: GasPriceBoundsTuple, b: GasPriceBoundsTuple)
   a.maxGasPriceWei === b.maxGasPriceWei;
 
 /**
- * Gas-price bounds for `chainId` from `deployConfig.json` `chains[id].gasPriceBounds`,
- * else {@link DEFAULT_GAS_PRICE_BOUNDS}. On COTI (no reliable basefee), set explicit bounds in config.
+ * Gas-price bounds for `chainId` from deployConfig `chains[id].gasPriceBounds`.
+ * Missing config is an error (no silent fallback to on-chain storage defaults).
  */
 export const readGasPriceBoundsForChain = async (chainId: number): Promise<GasPriceBoundsTuple> => {
-  try {
-    const cfg = await readDeployConfig();
-    const bounds = cfg.chains?.[String(chainId)]?.gasPriceBounds;
-    if (bounds?.minGasPriceWei != null) {
-      return gasPriceBoundsFromJson(bounds);
-    }
-  } catch {
-    // fall through
+  const cfg = await readDeployConfig();
+  const bounds = cfg.chains?.[String(chainId)]?.gasPriceBounds;
+  if (bounds?.minGasPriceWei == null) {
+    throw new Error(
+      `chains[${chainId}].gasPriceBounds is required in deployConfig (minGasPriceWei, maxGasPriceWei, minPriorityFeeWei). ` +
+        `Do not rely on inbox storage defaults.`
+    );
   }
-  return { ...DEFAULT_GAS_PRICE_BOUNDS };
+  const parsed = gasPriceBoundsFromJson(bounds);
+  assertGasPriceBoundsForDeploy(parsed, chainId);
+  return parsed;
 };
 
 export const readGasPriceBoundsForChainSync = (chainId: number): GasPriceBoundsTuple => {
-  try {
-    const cfg = readDeployConfigSync() as DeployConfig;
-    const bounds = cfg.chains?.[String(chainId)]?.gasPriceBounds;
-    if (bounds?.minGasPriceWei != null) {
-      return gasPriceBoundsFromJson(bounds);
-    }
-  } catch {
-    // fall through
+  const cfg = readDeployConfigSync() as DeployConfig;
+  const bounds = cfg.chains?.[String(chainId)]?.gasPriceBounds;
+  if (bounds?.minGasPriceWei == null) {
+    throw new Error(
+      `chains[${chainId}].gasPriceBounds is required in deployConfig (minGasPriceWei, maxGasPriceWei, minPriorityFeeWei). ` +
+        `Do not rely on inbox storage defaults.`
+    );
   }
-  return { ...DEFAULT_GAS_PRICE_BOUNDS };
+  const parsed = gasPriceBoundsFromJson(bounds);
+  assertGasPriceBoundsForDeploy(parsed, chainId);
+  return parsed;
+};
+
+/**
+ * Deploy assert: non-zero floor always; non-zero ceiling on COTI / non-EIP-1559 fee→gas paths.
+ * EIP-1559 sources may keep `maxGasPriceWei = 0` (ceiling disabled; basefee + tip path).
+ */
+export const assertGasPriceBoundsForDeploy = (bounds: GasPriceBoundsTuple, chainId: number): void => {
+  if (bounds.minGasPriceWei === 0n) {
+    throw new Error(
+      `gasPriceBounds.minGasPriceWei must be non-zero (chainId=${chainId}). ` +
+        `Set chains[${chainId}].gasPriceBounds in deployConfig.`
+    );
+  }
+  if (isCotiFamilyChainId(chainId) && bounds.maxGasPriceWei === 0n) {
+    throw new Error(
+      `gasPriceBounds.maxGasPriceWei must be non-zero on COTI (chainId=${chainId}); ` +
+        `fee→gas uses clamped tx.gasprice when basefee is unavailable.`
+    );
+  }
 };
 
 export const formatGasPriceBounds = (t: GasPriceBoundsTuple): string =>
@@ -1557,13 +1579,8 @@ export const configureInboxGasPriceBounds = async (params: {
   walletClient: WalletClient;
   chainId: number;
 }): Promise<GasPriceBoundsTuple> => {
+  // readGasPriceBoundsForChain requires deployConfig bounds and asserts COTI ceiling.
   const bounds = await readGasPriceBoundsForChain(params.chainId);
-  if (bounds.minGasPriceWei === 0n) {
-    throw new Error(
-      `gasPriceBounds.minGasPriceWei must be non-zero (chainId=${params.chainId}). ` +
-        `Set chains[${params.chainId}].gasPriceBounds in deployConfig.json.`
-    );
-  }
   const deployer = await resolveDeployerAddress(params.walletClient);
   const hash = await params.inbox.write.setGasPriceBounds(
     [bounds.minPriorityFeeWei, bounds.minGasPriceWei, bounds.maxGasPriceWei],

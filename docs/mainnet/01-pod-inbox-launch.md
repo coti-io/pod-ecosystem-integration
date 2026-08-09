@@ -117,13 +117,13 @@ After deploy: CLI `priceOracle` seeds feeds/manual legs and calls `refreshCache`
 
 `chains.<id>.feeConfig.local` / `.remote` — min-fee templates applied by `feeConfig` target.
 
-`chains.<id>.gasPriceBounds` — **required on COTI** (non-EIP-1559):
+`chains.<id>.gasPriceBounds` — **required in deployConfig** (no silent inbox defaults). On COTI (non-EIP-1559) also require a non-zero ceiling:
 
 ```yaml
 gasPriceBounds:
   minPriorityFeeWei: "0"
   minGasPriceWei: "2000000000"
-  maxGasPriceWei: "50000000000"   # 0 disables ceiling on EIP-1559 sources
+  maxGasPriceWei: "50000000000"   # 0 disables ceiling on EIP-1559 sources only
 ```
 
 ## Verify
