@@ -113,7 +113,19 @@ oracle:
 
 After deploy: CLI `priceOracle` seeds feeds/manual legs and calls `refreshCache`. Re-run when prices drift.
 
-## Fee config
+## Fee config (required before traffic)
+
+Inbox storage starts with **zero** min-fee templates. Until `updateMinFeeConfigs` runs, creates that validate fees will not work as intended. There is **no** atomic constructor fee init this wave — fees are an explicit post-deploy step.
+
+**Procedure (every chain):**
+
+1. Deploy Inbox (+ oracle seed / `wireInboxOracle` as needed).
+2. Ensure `chains.<id>.feeConfig.local` / `.remote` and `chains.<id>.gasPriceBounds` are set in deployConfig (SoT).
+3. Run CLI target **`feeConfig`** — applies `updateMinFeeConfigs` and `setGasPriceBounds` from that config.
+4. Verify with `--verify-all` (or `verify:deployments`) that on-chain templates and bounds match deployConfig.
+5. Only then open the lane to users / miners.
+
+Constant-fee legs must also clear the worst-case floor assert (`constantFee ≥ priced execution + max-size ingest`). Variable legs must keep `errorLength ≤ 256` (on-chain returndata cap).
 
 `chains.<id>.feeConfig.local` / `.remote` — min-fee templates applied by `feeConfig` target.
 
@@ -135,6 +147,14 @@ DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=cotiMainnet npm run d
 
 Explorers: Snowscan (Etherscan V2), Cotiscan Blockscout, Etherscan — see `hardhat.config.ts` `chainDescriptors`.
 
-## Salt / address family
+## Salt / address family (SoT)
 
-`inboxSalt.label` (currently `pod.inbox.v2.2`) drives CREATE3 address. Bump the label (and clear salt fields) if Inbox bytecode changes before a fresh mainnet family deploy.
+**Single source of truth:** `deployConfig.*.yaml` (or `deployConfig.json`).
+
+| Field | Role |
+| --- | --- |
+| `inboxSalt.label` | CREATE3 salt family (e.g. `pod.inbox.v2.2`) — **required**; never a code constant |
+| `inboxSalt.salt` / `guardedSalt` / `address` | Resolved deterministic inputs (CLI persists these after precompute) |
+| `chains.<id>.inbox` | Deployed Inbox address for that chain (must match CREATE3 prediction for the label) |
+
+Consumers (SDK defaults, network docs, scripts) **derive** salt/address from this config — do not invent a second hardcoded inbox address. Bump `inboxSalt.label` (and clear salt/guardedSalt/address) if Inbox bytecode changes before a fresh address-family deploy. `mpcAbiCodecSalt.label` is independent (COTI re-encode only).

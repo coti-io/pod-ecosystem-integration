@@ -71,7 +71,7 @@ Requires funded `PRIVATE_KEY` / `COTI_TESTNET_PRIVATE_KEY` registered as inbox m
 | **WireInboxOracle** | `Inbox.setPriceOracle` — uses `consumers.inbox` or `priceOracle` |
 | **WireFactoryOracle** | `PrivacyPortalFactory.setPriceOracle` — uses `consumers.privacyPortalFactory` or `priceOracle` |
 | **PpFactory** | Deploys factory; constructor oracle = `consumers.privacyPortalFactory` or `priceOracle` (zero if unset — wire later). Optional `privacyPortalFactoryConstructor.feeRecipient` / `rescueRecipient` override the factory owner defaults. |
-| **FeeConfig** | Applies inbox min-fee templates from `feeConfig` **and** `{setGasPriceBounds}` from `gasPriceBounds` (required on COTI / non-EIP-1559). Constant-fee templates are **asserted** at apply time: `constantFee ≥ pricedExecution + maxMethodCallBytes × ingestGasPerByte` (then `maxExecutionGas ≥ constantFee`). |
+| **FeeConfig** | Applies inbox min-fee templates from `feeConfig` **and** `{setGasPriceBounds}` from `gasPriceBounds` (required on COTI / non-EIP-1559). Constant-fee templates are **asserted** at apply time: `constantFee ≥ pricedExecution + maxMethodCallBytes × ingestGasPerByte` (then `maxExecutionGas ≥ constantFee`). **Required before traffic** — Inbox fee templates default to zero until this target runs. |
 | **PpPortalFee** | Applies factory default portal protocol fees from `portalFee` |
 
 **Launch order (source chain, example Sepolia):**
