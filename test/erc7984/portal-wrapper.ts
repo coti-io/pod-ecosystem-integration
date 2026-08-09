@@ -18,7 +18,7 @@ const UNWRAP_REQUESTED = parseAbiItem(
   "event UnwrapRequested(address indexed receiver, bytes32 indexed unwrapRequestId, bytes32 amount)"
 );
 const UNWRAP_FINALIZED = parseAbiItem(
-  "event UnwrapFinalized(address indexed receiver, bytes32 indexed unwrapRequestId, bytes32 encryptedAmount, uint64 cleartextAmount)"
+  "event UnwrapFinalized(address indexed receiver, bytes32 indexed unwrapRequestId, bytes32 encryptedAmount, uint256 cleartextAmount)"
 );
 
 describe("ERC-7984 portal wrapper events", { concurrency: 1 }, async function () {

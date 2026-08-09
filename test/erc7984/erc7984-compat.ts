@@ -24,7 +24,7 @@ const UNWRAP_REQUESTED = parseAbiItem(
   "event UnwrapRequested(address indexed receiver, bytes32 indexed unwrapRequestId, bytes32 amount)"
 );
 const UNWRAP_FINALIZED = parseAbiItem(
-  "event UnwrapFinalized(address indexed receiver, bytes32 indexed unwrapRequestId, bytes32 encryptedAmount, uint64 cleartextAmount)"
+  "event UnwrapFinalized(address indexed receiver, bytes32 indexed unwrapRequestId, bytes32 encryptedAmount, uint256 cleartextAmount)"
 );
 
 const ERC7984_INTERFACE_ID = "0x4958f2a4" as Hex;
@@ -87,18 +87,19 @@ describe("ERC-7984 compatibility", { concurrency: 1 }, async function () {
     assert.equal(topicAddress(log!.topics[1] as Hex), getAddress(owner));
     assert.equal(topicAddress(log!.topics[2] as Hex), getAddress(bob));
     assert.equal(log!.topics[3], expectedHandle);
-    assert.equal(await harness.read.lastConfidentialTransferHandle(), expectedHandle);
   });
 
   it("uses sender ciphertext handle for burns and receiver handle for mints", async function () {
     const ct = { ciphertextHigh: 9n, ciphertextLow: 8n };
     const handle = keccak256(encodePacked(["uint256", "uint256"], [ct.ciphertextHigh, ct.ciphertextLow]));
 
-    await harness.write.emitCompletedTransfer([owner, zeroAddress, ct, ct], { account: owner });
-    assert.equal(await harness.read.lastConfidentialTransferHandle(), handle);
+    const burnHash = await harness.write.emitCompletedTransfer([owner, zeroAddress, ct, ct], { account: owner });
+    const burnReceipt = await publicClient.waitForTransactionReceipt({ hash: burnHash });
+    assert.ok(burnReceipt.logs.some((entry) => entry.topics[3] === handle));
 
-    await harness.write.emitCompletedTransfer([zeroAddress, owner, ct, ct], { account: owner });
-    assert.equal(await harness.read.lastConfidentialTransferHandle(), handle);
+    const mintHash = await harness.write.emitCompletedTransfer([zeroAddress, owner, ct, ct], { account: owner });
+    const mintReceipt = await publicClient.waitForTransactionReceipt({ hash: mintHash });
+    assert.ok(mintReceipt.logs.some((entry) => entry.topics[3] === handle));
   });
 
   it("tracks ERC-7984 operators independently from pToken allowances", async function () {
