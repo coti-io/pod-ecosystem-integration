@@ -4,21 +4,26 @@ forks:
   cotiRpc: 'http://127.0.0.1:8546'
   label: 'LIVE'
 inboxSalt:
-  label: 'pod.inbox.v2.2'
+  label: 'pod.inbox.v2.3'
   deployer: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
-  salt: '0xdF9F8FcA4591227C092FCBAb45A846C19fb6d1ae001fb9f7e3c0a1d0b8afd4c1'
-  guardedSalt: '0xc56d3f92a63cc05db162a4fcaf61a45a2469b9cca77f23db895484b9e8d2fd22'
-  address: '0x3b8B70819f27e0438cBcE7f31894f799da52648F'
+  salt: ''
+  guardedSalt: ''
+  address: ''
   bytecodeNote: 'CreateX deterministic address depends on Inbox creation bytecode, including Ownable(address(1))
     placeholder owner in the constructor. Bump `label` (and clear salt/guardedSalt/address) whenever Inbox bytecode
     changes before redeploying.'
   runbook: 'After inbox deploy: priceOracle (setInboxTokens → seed prices/feeds → refreshCache) → feeConfig (min-fee
-    templates + gasPriceBounds) → wireInboxOracle. On non-EIP-1559 chains (COTI), gasPriceBounds are required.'
+    templates + gasPriceBounds) → wireInboxOracle. On non-EIP-1559 chains (COTI), gasPriceBounds are required.
+    Inbox.init wires FeeManager (and COTI MpcAbiReEncode) as DELEGATECALL helpers; apps still bind only the Inbox address.'
 mpcAbiCodecSalt:
   label: 'pod.mpc-abi-reencode.v1.0'
   deployer: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   bytecodeNote: 'COTI only. CREATE3 MpcAbiReEncode (Inbox DELEGATECALL target). Bump label independently of
     inboxSalt when re-encode contract bytecode changes. Non-COTI Inbox init uses address(0).'
+feeManagerSalt:
+  label: 'pod.fee-manager.v1.0'
+  deployer: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  bytecodeNote: 'CREATE3 FeeManager (Inbox DELEGATECALL target) on every chain. Bump label independently of inboxSalt.'
 roles:
   owner: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   miners:
@@ -92,6 +97,7 @@ chains:
       maxGasPriceWei: '0'
   "43113":
     inbox: '0x3b8B70819f27e0438cBcE7f31894f799da52648F'
+    feeManager: ''
     priceOracle: '0x95ce33378c88734f3d86b51a4c6dc588722995fd'
     oracle:
       adapter: 'chainlink'
@@ -205,6 +211,7 @@ chains:
       maxGasPriceWei: '0'
   "7082400":
     inbox: '0x3b8B70819f27e0438cBcE7f31894f799da52648F'
+    feeManager: ''
     cotiExecutor: '0x6804961167c3c8ef2bf6839ddcf51ec1fbe800c3'
     priceOracle: '0xb471e172876ba9bb24a43528779ea31e0b0bda2f'
     oracle:
@@ -255,6 +262,7 @@ chains:
       maxGasPriceWei: '50000000000'
   "11155111":
     inbox: '0x3b8B70819f27e0438cBcE7f31894f799da52648F'
+    feeManager: ''
     priceOracle: '0x71f0deac8adb89b7f1b09b38e2531e06bcca0b03'
     oracle:
       adapter: 'band'

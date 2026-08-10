@@ -301,6 +301,10 @@ const CONSTANT_FEE = {
   callbackExecutionGas: 0n,
   errorLength: 0n,
   bufferRatioX10000: 0n,
+  maxMethodCallBytes: 8192n,
+  maxExecutionGas: 5_000_000n,
+  gasPriceMul: 1n,
+  gasPriceDiv: 1n,
 } as const;
 
 const deployInboxWithFees = async (viem: any, chainId: bigint, client: { public: PublicClient; wallet: WalletClient }) => {

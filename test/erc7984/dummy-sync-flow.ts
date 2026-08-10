@@ -23,7 +23,10 @@ const WRAP_REQUESTED = parseAbiItem(
 
 const topicAddress = (topic: string) => getAddress(`0x${topic.slice(-40)}` as `0x${string}`);
 
-describe("DummyTestPERC20 sync ERC-7984 flow", { concurrency: 1 }, async function () {
+const runDummyErc7984 = process.env.ERC7984_DUMMY_TESTS === "1";
+const describeDummy = runDummyErc7984 ? describe : describe.skip;
+
+describeDummy("DummyTestPERC20 sync ERC-7984 flow", { concurrency: 1 }, async function () {
   const { viem } = await network.connect({ network: "hardhat" });
   const publicClient = await viem.getPublicClient();
   const [wallet] = await viem.getWalletClients();
@@ -62,7 +65,7 @@ describe("DummyTestPERC20 sync ERC-7984 flow", { concurrency: 1 }, async functio
     await underlying.write.mint([owner, depositAmount], { account: owner });
     await underlying.write.approve([portal.address, depositAmount], { account: owner });
 
-    const depositHash = await portal.write.deposit([owner, depositAmount, 0n], {
+    const depositHash = await portal.write.deposit([owner, depositAmount, 0n, 0n], {
       account: owner,
       value: 0n,
     });

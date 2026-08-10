@@ -89,7 +89,16 @@ function decryptU256Payload(raw: `0x${string}`, userKey: string): bigint {
   return decryptUint256(decodePodCtUint256Struct(raw), userKey, decryptUint);
 }
 
-describe("Pod MPC operations (system)", { concurrency: 1 }, async function () {
+const runPodOpsSystem = process.env.POD_OPS_SYSTEM_TESTS === "1";
+const d = runPodOpsSystem ? describe : describe.skip;
+
+if (!runPodOpsSystem) {
+  logStep(
+    "mpc-pod-ops: suite skipped — set POD_OPS_SYSTEM_TESTS=1 (live or sim COTI). Default `npm test` stays in-mem."
+  );
+}
+
+d("Pod MPC operations (system)", { concurrency: 1 }, async function () {
   const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
   const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
 

@@ -18,7 +18,7 @@ import {
   resolveDeployerAddress,
   waitMined,
 } from "../../scripts/deploy-utils.js";
-import { deployTestInbox, mpcAbiReEncodeOf } from "../../scripts/deploy-test-inbox.js";
+import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../../scripts/deploy-test-inbox.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { ONBOARD_CONTRACT_ADDRESS, Wallet as CotiWallet } from "@coti-io/coti-ethers";
 import { decryptUint, decryptUint256 as sdkDecryptUint256, prepareIT, prepareIT256 } from "@coti-io/coti-sdk-typescript";
@@ -33,10 +33,11 @@ import {
 import { JsonRpcProvider } from "ethers";
 
 /**
- * Native `msg.value` split for two-way Pod / inbox calls (from `inbox.calculateTwoWayFeeRequiredInLocalToken`).
+ * Native `msg.value` split for two-way Pod / inbox calls (JS mirror of {InboxFeeQuoter};
+ * Inbox no longer exposes `calculateTwoWayFeeRequiredInLocalToken` on its ABI).
  *
  * **Not comparable to `Request.targetFee` / `Request.callerFee` on-chain** — those are **gas unit** budgets, not wei
- * (`InboxFeeManager.validateAndPrepareTwoWayFees`):
+ * (`FeeManager.validateAndPrepareTwoWayFees` via Inbox DELEGATECALL):
  * - **`callerFee`** ≈ `callbackFeeWei / tx.gasprice` (uses the **tx** gas price, often ≫ `DEFAULT_GAS_PRICE`).
  * - **`targetFee`** = `(totalWei - callbackWei) * getLocalTokenPriceUSDX128 / getRemoteTokenPriceUSDX128 / gasPrice`.
  *   With local ≈ ETH and remote ≈ COTI, `local/remote` is huge, so the **remote** leg’s stipend is a **large** gas number
@@ -218,7 +219,7 @@ export const deployInboxWithInit = async (
   const owner: `0x${string}` =
     clientOpts?.client?.wallet?.account?.address ??
     (await hh.getWalletClients())[0].account.address;
-  await inbox.write.init([owner, chainId, mpcAbiReEncodeOf(inbox)]);
+  await inbox.write.init([owner, chainId, mpcAbiReEncodeOf(inbox), feeManagerOf(inbox)]);
   return inbox;
 };
 
@@ -314,30 +315,105 @@ export async function applySystemInboxMinFeeConfigs(params: {
  */
 export const DEFAULT_MINED_TARGET_EXECUTION_GAS = 2_500_000n;
 
-/** Same as `InboxFeeManager.DEFAULT_GAS_PRICE` — wei per gas passed to `calculateTwoWayFeeRequiredInLocalToken` in setup. */
-const MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI = 2_000_000_000;
+/** Same as `FeeManager.DEFAULT_GAS_PRICE` — wei per gas used when quoting two-way fees in setup. */
+const MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI = 2_000_000_000n;
 /** Calldata size terms for the two-way fee helper (reasonable MPC payload headroom vs. `test/InboxFeeCalculation.ts`). */
 const MPC_FEE_CALC_CALL_SIZE = 512n;
-/** Extra execution gas terms for `calculateTwoWayFeeRequired` — 0 so estimates match `validateAndPrepareTwoWayFees` minima (template already includes `callbackExecutionGas`). */
+/** Extra execution gas terms for fee quotes — matches historical `calculateTwoWayFeeRequired` args. */
 const MPC_FEE_CALC_REMOTE_EXEC_GAS = 300000n;
 const MPC_FEE_CALC_CALLBACK_EXEC_GAS = 300000n;
 
 const padPodFeeWei = (x: bigint) => x + x / 20n + 1n;
 
+type FeeConfigTuple = readonly [
+  bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint
+];
+
+const feeConfigFromTuple = (t: FeeConfigTuple): SystemInboxFeeConfig => ({
+  constantFee: BigInt(t[0]),
+  gasPerByte: BigInt(t[1]),
+  callbackExecutionGas: BigInt(t[2]),
+  errorLength: BigInt(t[3]),
+  bufferRatioX10000: BigInt(t[4]),
+  maxMethodCallBytes: BigInt(t[5]),
+  maxExecutionGas: BigInt(t[6]),
+  gasPriceMul: BigInt(t[7]),
+  gasPriceDiv: BigInt(t[8]),
+});
+
+const expectedMinFeeGasUnits = (dataSize: bigint, feeConfig: SystemInboxFeeConfig): bigint => {
+  if (feeConfig.constantFee > 0n) return feeConfig.constantFee;
+  const gasUnits =
+    dataSize * feeConfig.gasPerByte +
+    feeConfig.callbackExecutionGas +
+    feeConfig.errorLength * feeConfig.gasPerByte;
+  return (gasUnits * (10000n + feeConfig.bufferRatioX10000)) / 10000n;
+};
+
 /**
- * Two-way **native wei** for `msg.value` / callback args (not `eth_estimateGas`). Wraps
- * `calculateTwoWayFeeRequiredInLocalToken` with the current oracle + min-fee configs.
- *
+ * JS mirror of {InboxFeeQuoter.calculateTwoWayFeeRequiredInLocalToken} using live inbox configs + oracle prices.
+ * Returns unpadded `[targetFeeLocalWei, callerFeeLocalWei]`.
+ */
+export async function calculateTwoWayFeeRequiredInLocalToken(
+  inbox: any,
+  remoteMethodCallSize: bigint,
+  callBackMethodCallSize: bigint,
+  remoteMethodExecutionGas: bigint,
+  callBackMethodExecutionGas: bigint,
+  gasPrice: bigint
+): Promise<[bigint, bigint]> {
+  const local = feeConfigFromTuple((await inbox.read.localMinFeeConfig()) as FeeConfigTuple);
+  const remote = feeConfigFromTuple((await inbox.read.remoteMinFeeConfig()) as FeeConfigTuple);
+  const oracleAddr = (await inbox.read.priceOracle()) as `0x${string}`;
+  if (!oracleAddr || oracleAddr === zeroAddress) {
+    throw new Error("calculateTwoWayFeeRequiredInLocalToken: inbox.priceOracle() is unset");
+  }
+
+  let localPrice = 10n ** 18n;
+  let remotePrice = 10n ** 18n;
+  const client = (inbox as any)._publicClient ?? (inbox as any).client?.public;
+  if (client?.readContract) {
+    const prices = (await client.readContract({
+      address: oracleAddr,
+      abi: [
+        {
+          type: "function",
+          name: "getPricesUSD",
+          stateMutability: "view",
+          inputs: [],
+          outputs: [
+            { name: "localPrice", type: "uint256" },
+            { name: "remotePrice", type: "uint256" },
+          ],
+        },
+      ],
+      functionName: "getPricesUSD",
+    })) as [bigint, bigint];
+    [localPrice, remotePrice] = prices;
+  }
+
+  let targetGasRemote = expectedMinFeeGasUnits(remoteMethodCallSize, remote) + remoteMethodExecutionGas;
+  let callerGasLocal = expectedMinFeeGasUnits(callBackMethodCallSize, local) + callBackMethodExecutionGas;
+  // ceil mulDiv for skew invert: gas * div / mul (matches InboxFeeQuoter Rounding.Ceil)
+  targetGasRemote = (targetGasRemote * remote.gasPriceDiv + remote.gasPriceMul - 1n) / remote.gasPriceMul;
+  callerGasLocal = (callerGasLocal * local.gasPriceDiv + local.gasPriceMul - 1n) / local.gasPriceMul;
+  const targetGasLocal = (targetGasRemote * remotePrice + localPrice - 1n) / localPrice;
+  return [targetGasLocal * gasPrice, callerGasLocal * gasPrice];
+}
+
+/**
+ * Two-way **native wei** for `msg.value` / callback args (not `eth_estimateGas`).
  * On-chain, the inbox stores **gas units** in `Request.targetFee` / `callerFee`; see {@link PodTwoWayFeeEstimate}.
  */
 export async function estimateGas(inbox: any): Promise<PodTwoWayFeeEstimate> {
-  const [targetWei, callerWei] = await inbox.read.calculateTwoWayFeeRequiredInLocalToken([
+  const [targetWei, callerWei] = await calculateTwoWayFeeRequiredInLocalToken(
+    inbox,
     MPC_FEE_CALC_CALL_SIZE,
     MPC_FEE_CALC_CALL_SIZE,
     MPC_FEE_CALC_REMOTE_EXEC_GAS,
     MPC_FEE_CALC_CALLBACK_EXEC_GAS,
-    MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI,
-  ]);
+    MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI
+  );
   return {
     callbackFeeWei: padPodFeeWei(callerWei),
     totalValueWei: padPodFeeWei(targetWei + callerWei),
@@ -383,6 +459,9 @@ export async function ensureMpcInboxOracleAndFees(params: {
     publicClient,
     walletClient,
   });
+
+  // So {@link estimateGas} can read oracle USD prices without a separate client arg.
+  (inbox as any)._publicClient = publicClient;
 
   // Pin fee→gas conversion to the same assumed price used by {@link estimateGas}.
   // Without this, Hardhat basefee / minGasPriceWei floors shrink gas-unit budgets and trip CallbackFeeTooLow.

@@ -67,6 +67,11 @@ const main = async () => {
     envKey: "MPC_ABI_CODEC_SALT_LABEL",
     configPath: "deployConfig.mpcAbiCodecSalt.label",
   });
+  const feeManagerSaltLabel = requireSaltLabel({
+    fromConfig: (deployConfigEarly as any).feeManagerSalt?.label,
+    envKey: "FEE_MANAGER_SALT_LABEL",
+    configPath: "deployConfig.feeManagerSalt.label",
+  });
   console.log(`[deploy-full-testnet] Using miner: ${minerAddress}`);
 
   console.log(`[deploy-full-testnet] Connecting to source network ${SOURCE_NETWORK}`);
@@ -104,6 +109,7 @@ const main = async () => {
     publicClient: sourcePublicClient,
     walletClient: sourceWalletClient,
     saltLabel: inboxSaltLabel,
+    feeManagerSaltLabel,
   });
   const sourceInbox = sourceInboxDeploy.inbox;
   console.log(
@@ -111,6 +117,7 @@ const main = async () => {
       ? `[deploy-full-testnet] Source Inbox already deployed: ${sourceInbox.address}`
       : `[deploy-full-testnet] Source Inbox deployed: ${sourceInbox.address}`
   );
+  console.log(`[deploy-full-testnet] Source FeeManager: ${sourceInboxDeploy.feeManager}`);
   console.log("[deploy-full-testnet] Ensuring source miner is registered...");
   await ensureMinerRegistered({
     inbox: sourceInbox,
@@ -166,6 +173,7 @@ const main = async () => {
     saltLabel: inboxSaltLabel,
     deployReEncode: true,
     reEncodeSaltLabel: mpcAbiCodecSaltLabel,
+    feeManagerSaltLabel,
   });
   const cotiInbox = cotiInboxDeploy.inbox;
   console.log(
@@ -173,6 +181,7 @@ const main = async () => {
       ? `[deploy-full-testnet] COTI Inbox already deployed: ${cotiInbox.address}`
       : `[deploy-full-testnet] COTI Inbox deployed: ${cotiInbox.address}`
   );
+  console.log(`[deploy-full-testnet] COTI FeeManager: ${cotiInboxDeploy.feeManager}`);
   console.log(
     "[deploy-full-testnet] CreateX note: address depends on Inbox bytecode (Ownable(address(1))); bump inboxSalt.label if bytecode changes."
   );
@@ -306,9 +315,11 @@ const main = async () => {
   const deployConfig = await readDeployConfig();
   const sourceChainConfig = getChainConfig(deployConfig, sourceChainId, "source");
   sourceChainConfig.inbox = sourceInbox.address;
+  sourceChainConfig.feeManager = sourceInboxDeploy.feeManager;
   sourceChainConfig.priceOracle = sourcePriceOracle.address;
   const cotiChainConfig = getChainConfig(deployConfig, cotiChainIdNumber, "coti");
   cotiChainConfig.inbox = cotiInbox.address;
+  cotiChainConfig.feeManager = cotiInboxDeploy.feeManager;
   cotiChainConfig.cotiExecutor = cotiExecutor.address;
   cotiChainConfig.priceOracle = cotiPriceOracle.address;
   await writeDeployConfig(deployConfig);

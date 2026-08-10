@@ -207,6 +207,7 @@ export const oracleAdapterType = (oracleConfig?: OracleConfigJson): OracleAdapte
 type DeployConfig = {
   inboxSalt?: { label?: string; [key: string]: unknown };
   mpcAbiCodecSalt?: { label?: string; [key: string]: unknown };
+  feeManagerSalt?: { label?: string; [key: string]: unknown };
   /**
    * Global role intent for every chain/contract.
    * Same owner / miners / operators apply network-wide for consistency.
@@ -216,6 +217,7 @@ type DeployConfig = {
     string,
     {
       inbox?: string;
+      feeManager?: string;
       cotiExecutor?: string;
       priceOracle?: string;
       oracle?: OracleConfigJson;
@@ -1734,7 +1736,7 @@ export const readInboxArtifact = async (): Promise<InboxArtifact> => {
 };
 
 /**
- * Deploy optional {MpcAbiReEncode} via CREATE3 (COTI), then Inbox via CreateX `deployCreate3AndInit`.
+ * Deploy {FeeManager} via CREATE3, optional {MpcAbiReEncode} (COTI), then Inbox via CreateX `deployCreate3AndInit`.
  * Pass `deployReEncode: true` (or a salt label) on COTI; omit on non-MPC chains (`address(0)`).
  */
 export const deployDeterministicInbox = async (params: {
@@ -1753,11 +1755,14 @@ export const deployDeterministicInbox = async (params: {
   deployReEncode?: boolean;
   /** From deployConfig (`mpcAbiCodecSalt.label`). Required when deployReEncode. */
   reEncodeSaltLabel?: string;
+  /** From deployConfig (`feeManagerSalt.label`). Required — FeeManager is deployed on every chain. */
+  feeManagerSaltLabel: string;
 }): Promise<
   DeployInboxDeterministicResult & {
     inbox: any;
     deployer: `0x${string}`;
     mpcAbiReEncode: Address;
+    feeManager: Address;
   }
 > => {
   const deployer = await resolveDeployerAddress(params.walletClient);
@@ -1800,6 +1805,42 @@ export const deployDeterministicInbox = async (params: {
     mpcAbiReEncode = getAddress(codecDeploy.address);
   }
 
+  if (!params.feeManagerSaltLabel?.trim()) {
+    throw new Error(
+      "deployDeterministicInbox: feeManagerSaltLabel required (deployConfig.feeManagerSalt.label)"
+    );
+  }
+  const feeManagerPathCandidates = [
+    path.resolve(process.cwd(), "artifacts/contracts/fee/FeeManager.sol/FeeManager.json"),
+    path.resolve(
+      process.cwd(),
+      "artifacts/@coti-io/coti-pod-inbox-contracts/contracts/fee/FeeManager.sol/FeeManager.json"
+    ),
+  ];
+  let feeBytecode: `0x${string}` | undefined;
+  for (const p of feeManagerPathCandidates) {
+    try {
+      const json = JSON.parse(await fs.readFile(p, "utf8")) as { bytecode?: string };
+      if (json.bytecode?.startsWith("0x")) {
+        feeBytecode = json.bytecode as `0x${string}`;
+        break;
+      }
+    } catch {
+      // try next
+    }
+  }
+  if (!feeBytecode) {
+    throw new Error("deployDeterministicInbox: FeeManager artifact missing (compile first)");
+  }
+  const feeDeploy = await deployCreate3Deterministic({
+    publicClient: params.publicClient,
+    walletClient: params.walletClient,
+    deployer,
+    bytecode: feeBytecode,
+    saltLabel: params.feeManagerSaltLabel,
+  });
+  const feeManager = getAddress(feeDeploy.address);
+
   const artifact = await readInboxArtifact();
 
   const result = await deployInboxViaCreateX({
@@ -1810,6 +1851,7 @@ export const deployDeterministicInbox = async (params: {
     artifact,
     saltLabel: params.saltLabel,
     mpcAbiReEncode,
+    feeManager,
   });
   const inbox = await params.viem.getContractAt("Inbox", result.address, {
     client: { public: params.publicClient, wallet: params.walletClient },
@@ -1830,6 +1872,7 @@ export const deployDeterministicInbox = async (params: {
     inbox,
     deployer,
     mpcAbiReEncode,
+    feeManager,
   };
 };
 

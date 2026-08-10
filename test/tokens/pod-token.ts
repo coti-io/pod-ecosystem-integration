@@ -34,6 +34,7 @@ import {
   type PodTokenTestContext,
 } from "./test-token-utils.js";
 import {
+  calculateTwoWayFeeRequiredInLocalToken,
   collectInboxFeesAfterTest,
   getLatestRequest,
   podTwoWayWriteOptions,
@@ -406,7 +407,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     pt("case bad-enc approve: done (retry succeeded, allowance updated)");
   });
 
-  // Matches `MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI` in `test/system/mpc-test-utils.ts` (InboxFeeManager.DEFAULT_GAS_PRICE).
+  // Matches `MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI` in `test/system/mpc-test-utils.ts` (FeeManager.DEFAULT_GAS_PRICE).
   // When we pin `gasPrice` on an auto-fee tx to this value, the inbox's runtime reference gas price equals the
   // price used by `estimateGas` in setup, so the contract's internal `_estimateTwoWayFeeInLocalToken()` produces
   // the exact same (target, caller) split.
@@ -415,24 +416,27 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
   const FEE_EST_CALLBACK_CALL_SIZE = 512n;
   const FEE_EST_REMOTE_EXEC_GAS = 300_000n;
   const FEE_EST_CALLBACK_EXEC_GAS = 300_000n;
-  /** Small pad that absorbs mulDiv rounding in `calculateTwoWayFeeRequiredInLocalToken` vs `validateAndPrepareTwoWayFees`. */
+  /** Small pad that absorbs mulDiv rounding in fee quote vs `validateAndPrepareTwoWayFees`. */
   const paddedPodFee = (x: bigint) => x + x / 100n + 1n;
 
-  it("estimateFee matches inbox.calculateTwoWayFeeRequiredInLocalToken for the auto-fee constants", async function () {
-    pt("case estimateFee: start");
-    const [targetWei, callerWei] = (await ctx.base.contracts.inboxSepolia.read.calculateTwoWayFeeRequiredInLocalToken([
+  const quoteTwoWayFees = () =>
+    calculateTwoWayFeeRequiredInLocalToken(
+      ctx.base.contracts.inboxSepolia,
       FEE_EST_REMOTE_CALL_SIZE,
       FEE_EST_CALLBACK_CALL_SIZE,
       FEE_EST_REMOTE_EXEC_GAS,
       FEE_EST_CALLBACK_EXEC_GAS,
-      FEE_CALC_GAS_PRICE_WEI,
-    ])) as [bigint, bigint];
+      FEE_CALC_GAS_PRICE_WEI
+    );
+
+  it("estimateFee matches calculateTwoWayFeeRequiredInLocalToken for the auto-fee constants", async function () {
+    pt("case estimateFee: start");
+    const [targetWei, callerWei] = await quoteTwoWayFees();
     pt(`case estimateFee: inbox target=${targetWei} caller=${callerWei}`);
     assert.ok(targetWei > 0n, "targetWei must be non-zero");
     assert.ok(callerWei > 0n, "callerWei must be non-zero");
-    // `estimateFee()` uses `tx.gasprice`; in plain `eth_call` that is 0, so `calculateTwoWayFeeRequiredInLocalToken`
-    // returns (0, 0). Override the call-level `gasPrice` so the view sees the same tx.gasprice as the helper above
-    // and `_estimateTwoWayFeeInLocalToken` produces the exact same (target, callback) split.
+    // `estimateFee()` uses `tx.gasprice`; in plain `eth_call` that is 0, so the on-chain estimate is (0, 0).
+    // Override the call-level `gasPrice` so the view sees the same tx.gasprice as the helper above.
     const estimateFeeAbi = [
       {
         type: "function",
@@ -457,10 +461,10 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
       rawData
     ) as [bigint, bigint, bigint];
     pt(`case estimateFee: contract total=${total} target=${target} callback=${callback}`);
-    assert.equal(target, targetWei, "contract target fee must match inbox calculation");
-    assert.equal(callback, callerWei, "contract callback fee must match inbox calculation");
+    assert.equal(target, targetWei, "contract target fee must match fee quote helper");
+    assert.equal(callback, callerWei, "contract callback fee must match fee quote helper");
     assert.equal(total, targetWei + callerWei, "total must equal target + callback");
-    pt("case estimateFee: done (internal estimator matches inbox helper exactly)");
+    pt("case estimateFee: done (internal estimator matches fee quote helper exactly)");
   });
 
   it("auto-fee transfer: contract computes callback fee internally and round-trips", async function () {
@@ -472,15 +476,9 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     pt(`case auto-fee transfer: fund owner with ${start}`);
     await mintOnCotiAndSync(ctx, [{ address: ctx.owner, amount: start }], "autoXferFund");
 
-    const [targetWei, callerWei] = (await ctx.base.contracts.inboxSepolia.read.calculateTwoWayFeeRequiredInLocalToken([
-      FEE_EST_REMOTE_CALL_SIZE,
-      FEE_EST_CALLBACK_CALL_SIZE,
-      FEE_EST_REMOTE_EXEC_GAS,
-      FEE_EST_CALLBACK_EXEC_GAS,
-      FEE_CALC_GAS_PRICE_WEI,
-    ])) as [bigint, bigint];
-    // Add 1% pad: `calculateTwoWayFeeRequiredInLocalToken` rounds target down in mulDiv (remote→local), and
-    // `validateAndPrepareTwoWayFees` rounds again (local→remote), so equality at the boundary can fail by a few units.
+    const [targetWei, callerWei] = await quoteTwoWayFees();
+    // Add 1% pad: fee quote rounds target (remote→local), and validateAndPrepareTwoWayFees rounds again
+    // (local→remote), so equality at the boundary can fail by a few units.
     const totalValue = paddedPodFee(targetWei + callerWei);
     pt(`case auto-fee transfer: inbox target=${targetWei} caller=${callerWei} totalPadded=${totalValue}`);
 
@@ -518,13 +516,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
   it("auto-fee approve: contract computes callback fee internally and round-trips", async function () {
     pt("case auto-fee approve: start");
     const allowanceAmt = 1_500n;
-    const [targetWei, callerWei] = (await ctx.base.contracts.inboxSepolia.read.calculateTwoWayFeeRequiredInLocalToken([
-      FEE_EST_REMOTE_CALL_SIZE,
-      FEE_EST_CALLBACK_CALL_SIZE,
-      FEE_EST_REMOTE_EXEC_GAS,
-      FEE_EST_CALLBACK_EXEC_GAS,
-      FEE_CALC_GAS_PRICE_WEI,
-    ])) as [bigint, bigint];
+    const [targetWei, callerWei] = await quoteTwoWayFees();
     const totalValue = paddedPodFee(targetWei + callerWei);
 
     const itAllow = await encryptAmount(ctx, allowanceAmt);
