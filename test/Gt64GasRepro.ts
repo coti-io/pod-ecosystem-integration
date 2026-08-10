@@ -24,7 +24,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { resolveCotiTestnetPrivateKey, normalizePrivateKey } from "./system/mpc-test-utils.js";
 
 const cotiRpc = process.env.COTI_TESTNET_RPC_URL?.trim();
-const canRunCoti = Boolean(cotiRpc);
+/** Opt-in: live COTI RPC can 502 and should not fail default `npm test`. Use `npm run test:gt64-repro`. */
+const canRunCoti = Boolean(cotiRpc) && process.env.GT64_GAS_REPRO === "1";
 
 const deployGasOpt = (() => {
   const raw = process.env.MPC_COTI_CONTRACT_DEPLOY_GAS?.trim();

@@ -15,7 +15,11 @@ import {
 } from "./mpc-test-utils.js";
 import { mineRequest, setupContext128, type TestContext128 } from "./mpc-test-utils-128.js";
 
-describe("MpcAdder128 (system)", { concurrency: 1 }, async function () {
+
+const runCotiSystem = process.env.COTI_SYSTEM_TESTS === "1" || process.env.COTI_BACKEND === "sim";
+const describeCoti = runCotiSystem ? describe : describe.skip;
+
+describeCoti("MpcAdder128 (system)", { concurrency: 1 }, async function () {
   const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
   const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
 

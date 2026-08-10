@@ -21,7 +21,11 @@ import { mineRequest, setupContext256, type TestContext256 } from "./mpc-test-ut
  * share one COTI miner wallet and strict inbox nonce ordering. Run scenarios in one `it` so they
  * execute strictly in order.
  */
-describe("MpcAdder256 (system)", { concurrency: 1 }, async function () {
+
+const runCotiSystem = process.env.COTI_SYSTEM_TESTS === "1" || process.env.COTI_BACKEND === "sim";
+const describeCoti = runCotiSystem ? describe : describe.skip;
+
+describeCoti("MpcAdder256 (system)", { concurrency: 1 }, async function () {
   const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
   const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
 

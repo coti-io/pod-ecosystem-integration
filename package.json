@@ -27,7 +27,7 @@
     "test": "hardhat test",
     "test:executor-coti": "hardhat test test/system/mpc-executor-coti.ts",
     "test:executor-fork": "hardhat test test/system/mpc-executor-fork.ts",
-    "test:gt64-repro": "hardhat test test/Gt64GasRepro.ts",
+    "test:gt64-repro": "GT64_GAS_REPRO=1 hardhat test test/Gt64GasRepro.ts",
     "test:pod-token": "COTI_BACKEND=sim POD_TOKEN_SYSTEM_TESTS=1 hardhat test test/tokens/pod-token.ts",
     "test:pod-token-late-onboard": "POD_TOKEN_LATE_ONBOARD_TESTS=1 hardhat test test/tokens/pod-token-late-onboard.ts",
     "investigate:offboard-to-user": "OFFBOARD_TO_USER_INVESTIGATION=1 hardhat test test/tokens/offboard-to-user-investigation.ts",

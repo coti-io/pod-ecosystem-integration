@@ -45,7 +45,11 @@ function assertHexPrefix(actual: unknown, expectedPrefix: `0x${string}`, label: 
   );
 }
 
-describe("MpcAdderPausable retryFailedRequest (system)", { concurrency: 1 }, async function () {
+
+const runCotiSystem = process.env.COTI_SYSTEM_TESTS === "1" || process.env.COTI_BACKEND === "sim";
+const describeCoti = runCotiSystem ? describe : describe.skip;
+
+describeCoti("MpcAdderPausable retryFailedRequest (system)", { concurrency: 1 }, async function () {
   const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
   const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
 

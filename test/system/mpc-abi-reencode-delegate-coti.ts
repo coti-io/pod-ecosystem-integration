@@ -41,7 +41,11 @@ const GAS_REENCODE = process.env.MPC_COTI_REENCODE_GAS?.trim()
   ? BigInt(process.env.MPC_COTI_REENCODE_GAS.trim())
   : 8_000_000n;
 
-describe("MpcAbiReEncode DELEGATECALL (COTI)", { concurrency: false, timeout: 900_000 }, async function () {
+
+const runCotiSystem = process.env.COTI_SYSTEM_TESTS === "1" || process.env.COTI_BACKEND === "sim";
+const describeCoti = runCotiSystem ? describe : describe.skip;
+
+describeCoti("MpcAbiReEncode DELEGATECALL (COTI)", { concurrency: false, timeout: 900_000 }, async function () {
   if (!canRunCoti) {
     it.skip(
       "set COTI_TESTNET_RPC_URL and COTI_TESTNET_PRIVATE_KEY (or PRIVATE_KEY) to run this file",

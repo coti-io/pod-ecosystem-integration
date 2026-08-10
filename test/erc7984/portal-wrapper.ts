@@ -42,7 +42,7 @@ describe("ERC-7984 portal wrapper events", { concurrency: 1 }, async function ()
     ctx = await deployDirectPortalContext({ viem, publicClient, wallet, owner });
     await fundUserAndApprovePortal(ctx, 100n);
 
-    const depositHash = await ctx.portal.write.deposit([ctx.recipient, 50n, 77n], {
+    const depositHash = await ctx.portal.write.deposit([ctx.recipient, 50n, 0n, 77n], {
       account: owner,
       value: 1_000n,
     });
@@ -54,7 +54,7 @@ describe("ERC-7984 portal wrapper events", { concurrency: 1 }, async function ()
     );
 
     await fundUserAndApprovePortal(ctx, 100n);
-    const wrapHash = await ctx.portal.write.wrap([ctx.recipient, 25n, 77n], {
+    const wrapHash = await ctx.portal.write.wrap([ctx.recipient, 25n, 0n, 77n], {
       account: owner,
       value: 1_000n,
     });

@@ -24,7 +24,9 @@ DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=forkSource npm run de
 
 ```
 CreateX (once per chain)
-  → Inbox (CreateX CREATE3, same address family)
+  → FeeManager (CREATE3; Inbox DELEGATECALL target — every chain)
+  → MpcAbiReEncode (CREATE3; COTI only)
+  → Inbox (CreateX CREATE3+init with helper addresses; same address family)
   → PriceOracle (+ seed feeds / manual prices + refreshCache)
   → feeConfig (min-fee templates) + gasPriceBounds
   → wireInboxOracle
@@ -33,6 +35,7 @@ CreateX (once per chain)
   → configureAdder (point adder at COTI executor)
 ```
 
+The `inbox` deploy target CREATE3-deploys **FeeManager** (and on COTI **MpcAbiReEncode**) before atomic Inbox init. Apps and CMS still configure **only the Inbox address**; record `chains.<id>.feeManager` in deployConfig for ops/verification.
 CLI (interactive or batch):
 
 ```bash
@@ -159,8 +162,13 @@ Explorers: Snowscan (Etherscan V2), Cotiscan Blockscout, Etherscan — see `hard
 
 | Field | Role |
 | --- | --- |
-| `inboxSalt.label` | CREATE3 salt family (e.g. `pod.inbox.v2.2`) — **required**; never a code constant |
+| `inboxSalt.label` | CREATE3 salt family (e.g. `pod.inbox.v2.3`) — **required**; never a code constant |
 | `inboxSalt.salt` / `guardedSalt` / `address` | Resolved deterministic inputs (CLI persists these after precompute) |
+| `feeManagerSalt.label` | CREATE3 salt for {FeeManager} (every chain; DELEGATECALL target) — bump independently when FeeManager bytecode changes |
+| `mpcAbiCodecSalt.label` | CREATE3 salt for {MpcAbiReEncode} (COTI only) — bump independently of inboxSalt |
 | `chains.<id>.inbox` | Deployed Inbox address for that chain (must match CREATE3 prediction for the label) |
+| `chains.<id>.feeManager` | Deployed FeeManager (ops/verification; not a second dApp binding) |
 
-Consumers (SDK defaults, network docs, scripts) **derive** salt/address from this config — do not invent a second hardcoded inbox address. Bump `inboxSalt.label` (and clear salt/guardedSalt/address) if Inbox bytecode changes before a fresh address-family deploy. `mpcAbiCodecSalt.label` is independent (COTI re-encode only).
+Consumers (SDK defaults, network docs, scripts) **derive** salt/address from this config — do not invent a second hardcoded inbox address. Bump `inboxSalt.label` (and clear salt/guardedSalt/address) if Inbox bytecode changes before a fresh address-family deploy. `feeManagerSalt.label` and `mpcAbiCodecSalt.label` are independent.
+
+After inbox deploy, verify explorer stubs: fee admin methods still appear on Inbox, and `inbox.feeManager()` points at the deployed FeeManager.

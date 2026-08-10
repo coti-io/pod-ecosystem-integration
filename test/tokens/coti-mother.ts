@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { network } from "hardhat";
 import { encodeFunctionData, parseAbi } from "viem";
 import { deployInboxWithInit } from "../system/mpc-test-utils.js";
+import { oracleTokensForChain } from "../../scripts/oracle-tokens.js";
 
 const CONSTANT_FEE = {
   constantFee: 1n,
@@ -10,6 +11,10 @@ const CONSTANT_FEE = {
   callbackExecutionGas: 0n,
   errorLength: 0n,
   bufferRatioX10000: 0n,
+  maxMethodCallBytes: 8192n,
+  maxExecutionGas: 5_000_000n,
+  gasPriceMul: 1n,
+  gasPriceDiv: 1n,
 } as const;
 
 const ONLY_INBOX_SELECTOR = "0xc4b7686e";
@@ -22,6 +27,8 @@ const deployInboxWithFees = async (
 ) => {
   const inbox = await deployInboxWithInit(viem, chainId, { client });
   const oracle = await viem.deployContract("PriceOracle", [owner], { client });
+  const { localToken, remoteToken } = oracleTokensForChain(Number(chainId));
+  await oracle.write.setInboxTokens([localToken, remoteToken], { account: owner });
   await oracle.write.setLocalTokenPriceUSD([10n ** 18n], { account: owner });
   await oracle.write.setRemoteTokenPriceUSD([10n ** 18n], { account: owner });
   await inbox.write.setPriceOracle([oracle.address], { account: owner });
