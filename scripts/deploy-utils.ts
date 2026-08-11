@@ -950,23 +950,43 @@ export const testnetMinFeeConfigsForChain = (chainId: number): { local: FeeConfi
  * Min-fee templates for `chainId`, sourced from `deployConfig.json` `chains[id].feeConfig`
  * when present, otherwise the built-in {@link testnetMinFeeConfigsForChain} defaults.
  * This makes `deployConfig.json` the single source of truth for deployed fee parameters.
+ *
+ * Fail-closed: if `chains[id].feeConfig` is present but incomplete/invalid, throw (do not
+ * silently fall back to builtins). Missing deployConfig file or absent feeConfig key may use builtins.
  */
 export const readFeeConfigForChain = async (
   chainId: number
 ): Promise<{ local: FeeConfigTuple; remote: FeeConfigTuple }> => {
-  let pair: { local: FeeConfigTuple; remote: FeeConfigTuple };
+  let cfg: Awaited<ReturnType<typeof readDeployConfig>>;
   try {
-    const cfg = await readDeployConfig();
-    const fc = cfg.chains?.[String(chainId)]?.feeConfig;
-    if (fc?.local && fc?.remote) {
-      pair = { local: feeConfigTupleFromJson(fc.local), remote: feeConfigTupleFromJson(fc.remote) };
-    } else {
-      pair = testnetMinFeeConfigsForChain(chainId);
-    }
+    cfg = await readDeployConfig();
   } catch {
-    // Missing/unreadable config — fall back to built-in defaults below.
-    pair = testnetMinFeeConfigsForChain(chainId);
+    // Missing/unreadable config — fall back to built-in defaults.
+    const pair = testnetMinFeeConfigsForChain(chainId);
+    assertFeeConfigPairConstantFeeFloors(pair);
+    assertFeeConfigPairErrorLengths(pair);
+    return pair;
   }
+
+  const fc = cfg.chains?.[String(chainId)]?.feeConfig;
+  if (fc == null) {
+    const pair = testnetMinFeeConfigsForChain(chainId);
+    assertFeeConfigPairConstantFeeFloors(pair);
+    assertFeeConfigPairErrorLengths(pair);
+    return pair;
+  }
+
+  if (!fc.local || !fc.remote) {
+    throw new Error(
+      `deployConfig.chains[${chainId}].feeConfig is present but incomplete: both local and remote are required`
+    );
+  }
+
+  // Present feeConfig must parse cleanly — no silent builtin fallback.
+  const pair = {
+    local: feeConfigTupleFromJson(fc.local),
+    remote: feeConfigTupleFromJson(fc.remote),
+  };
   assertFeeConfigPairConstantFeeFloors(pair);
   assertFeeConfigPairErrorLengths(pair);
   return pair;
