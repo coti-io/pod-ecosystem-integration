@@ -50,6 +50,8 @@ Inbox-only tests live in **coti-pod-inbox-contracts** (`test:inbox-events`, `tes
 
 ### GitHub Actions
 
+Canonical setup (architecture, secrets, PAT how-to, smoke test): **[docs/CI-CD.md](./docs/CI-CD.md)**.
+
 `.github/workflows/ci.yml` checks out this repo plus sibling `file:` deps (`coti-pod-inbox-contracts`, `coti-contracts`, `sim-coti-node`) and runs **in-mem** and **sim** jobs.
 
 | Trigger | Sibling refs |
@@ -58,10 +60,14 @@ Inbox-only tests live in **coti-pod-inbox-contracts** (`test:inbox-events`, `tes
 | `workflow_dispatch` | optional `inbox_ref` / `contracts_ref` / `sim_ref` |
 | `repository_dispatch` type `pod-contracts-changed` | uses `client_payload.repo` + `sha` for the changed sibling |
 
-**Secrets**
+**Secrets (summary)**
 
-- `CROSS_REPO_PAT` — PAT that can read `coti-io/*` and private `cotitech-io/sim-coti-node` (required for sim checkout; also used for sibling checkouts).
-- Sender repos (`coti-pod-inbox-contracts`, `coti-contracts`) need `PEI_DISPATCH_PAT` with permission to create `repository_dispatch` on this repo.
+| Secret | Repo | Purpose |
+|--------|------|---------|
+| `CROSS_REPO_PAT` | PEI (this repo) | Read `coti-io/*` siblings + private `cotitech-io/sim-coti-node` |
+| `PEI_DISPATCH_PAT` | inbox + coti-contracts | `repository_dispatch` into this repo on push to `main` |
+
+See [docs/CI-CD.md](./docs/CI-CD.md) for permissions and creation steps.
 
 ## Deploy
 
