@@ -57,7 +57,7 @@ const npmSolidityRoots = (packageName: string, subdir: string, opts?: { skipTest
 
 /** Inbox + coti-contracts pod/oracle + sim-coti — no link-contracts mirror. */
 const npmFilesToBuild = [
-  ...npmSolidityRoots("@coti-io/coti-pod-inbox-contracts", "contracts"),
+  ...npmSolidityRoots("@coti-io/coti-pod-inbox-contracts", "contracts", { skipTestDir: true }),
   // L-15 moved harness/mocks under test/contracts (not shipped in the npm package `files`, but present via file: link).
   ...npmSolidityRoots("@coti-io/coti-pod-inbox-contracts", "test/contracts"),
   ...npmSolidityRoots("@coti-io/coti-contracts", "contracts/pod"),
