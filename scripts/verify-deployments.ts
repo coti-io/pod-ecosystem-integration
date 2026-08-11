@@ -59,6 +59,10 @@ const FEE_FIELDS = [
   "callbackExecutionGas",
   "errorLength",
   "bufferRatioX10000",
+  "maxMethodCallBytes",
+  "maxExecutionGas",
+  "gasPriceMul",
+  "gasPriceDiv",
 ] as const;
 
 type FeeTuple = Record<(typeof FEE_FIELDS)[number], bigint>;
@@ -112,6 +116,10 @@ const normalizeFee = (raw: any): FeeTuple => {
       callbackExecutionGas: BigInt(raw[2]),
       errorLength: BigInt(raw[3]),
       bufferRatioX10000: BigInt(raw[4]),
+      maxMethodCallBytes: BigInt(raw[5]),
+      maxExecutionGas: BigInt(raw[6]),
+      gasPriceMul: BigInt(raw[7] ?? 1),
+      gasPriceDiv: BigInt(raw[8] ?? 1),
     };
   }
   return {
@@ -120,11 +128,17 @@ const normalizeFee = (raw: any): FeeTuple => {
     callbackExecutionGas: BigInt(raw.callbackExecutionGas),
     errorLength: BigInt(raw.errorLength),
     bufferRatioX10000: BigInt(raw.bufferRatioX10000),
+    maxMethodCallBytes: BigInt(raw.maxMethodCallBytes),
+    maxExecutionGas: BigInt(raw.maxExecutionGas),
+    gasPriceMul: BigInt(raw.gasPriceMul ?? 1),
+    gasPriceDiv: BigInt(raw.gasPriceDiv ?? 1),
   };
 };
 
 const formatFee = (f: FeeTuple): string =>
-  `const=${f.constantFee} gas/byte=${f.gasPerByte} cbGas=${f.callbackExecutionGas} errLen=${f.errorLength} buf=${f.bufferRatioX10000}`;
+  `const=${f.constantFee} gas/byte=${f.gasPerByte} cbGas=${f.callbackExecutionGas} errLen=${f.errorLength} ` +
+  `buf=${f.bufferRatioX10000} maxBytes=${f.maxMethodCallBytes} maxExec=${f.maxExecutionGas} ` +
+  `gpMul=${f.gasPriceMul} gpDiv=${f.gasPriceDiv}`;
 
 const feeEq = (a: FeeTuple, b: FeeTuple): boolean => FEE_FIELDS.every((k) => a[k] === b[k]);
 

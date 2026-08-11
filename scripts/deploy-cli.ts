@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { network } from "hardhat";
 import type { Address, PublicClient, WalletClient } from "viem";
-import { encodeFunctionData, zeroAddress } from "viem";
+import { encodeFunctionData, getAddress, zeroAddress } from "viem";
 import {
   buildInboxSalt,
   computeGuardedSalt,
@@ -116,6 +116,8 @@ type DeployCtx = {
   inboxSaltLabel: string;
   /** COTI {MpcAbiReEncode} salt label (from deployConfig or default). */
   mpcAbiCodecSaltLabel: string;
+  /** {FeeManager} CREATE3 salt label (from deployConfig; every chain). */
+  feeManagerSaltLabel: string;
   /** True when this network is a COTI role (needs re-encode helper). */
   isCoti: boolean;
 };
@@ -194,10 +196,22 @@ const readInboxSaltLabel = (cfg: any): string => {
 };
 
 /** COTI-only {MpcAbiReEncode} CREATE3 salt label (independent of inboxSalt). */
-const readMpcAbiCodecSaltLabel = (cfg: any): string => {
+const readMpcAbiCodecSaltLabel = (cfg: any, required: boolean): string => {
   const label = cfg?.mpcAbiCodecSalt?.label;
   if (typeof label !== "string" || label.length === 0) {
-    throw new Error("deployConfig.mpcAbiCodecSalt.label is required on COTI (SoT; no code default)");
+    if (required) {
+      throw new Error("deployConfig.mpcAbiCodecSalt.label is required on COTI (SoT; no code default)");
+    }
+    return "";
+  }
+  return label;
+};
+
+/** {FeeManager} CREATE3 salt label (independent of inboxSalt; required on every chain). */
+const readFeeManagerSaltLabel = (cfg: any): string => {
+  const label = cfg?.feeManagerSalt?.label;
+  if (typeof label !== "string" || label.length === 0) {
+    throw new Error("deployConfig.feeManagerSalt.label is required (SoT; no code default)");
   }
   return label;
 };
@@ -255,6 +269,30 @@ const recordMpcAbiCodecSalt = async (params: {
       typeof prev.bytecodeNote === "string" && prev.bytecodeNote.length > 0
         ? prev.bytecodeNote
         : "COTI only. CREATE3 {MpcAbiReEncode} DELEGATECALL target. Bump label (clear salt/address) when re-encode contract bytecode changes. Independent of inboxSalt.label.",
+  };
+  await writeCfg(cfg);
+};
+
+const recordFeeManagerSalt = async (params: {
+  label: string;
+  deployer: Address;
+  salt: `0x${string}`;
+  guardedSalt: `0x${string}`;
+  address: Address;
+}): Promise<void> => {
+  const cfg = await readCfg();
+  const prev = (cfg.feeManagerSalt ?? {}) as Record<string, unknown>;
+  cfg.feeManagerSalt = {
+    ...prev,
+    label: params.label,
+    deployer: params.deployer,
+    salt: params.salt,
+    guardedSalt: params.guardedSalt,
+    address: params.address,
+    bytecodeNote:
+      typeof prev.bytecodeNote === "string" && prev.bytecodeNote.length > 0
+        ? prev.bytecodeNote
+        : "CREATE3 {FeeManager} DELEGATECALL target (every chain). Bump label (clear salt/address) when FeeManager bytecode changes. Independent of inboxSalt.label.",
   };
   await writeCfg(cfg);
 };
@@ -786,15 +824,43 @@ const TARGETS: Target[] = [
     deploy: async (ctx) => {
       const roles = chainRoles(ctx);
       const codecLabel = ctx.mpcAbiCodecSaltLabel;
-      const { inbox, alreadyDeployed, mpcAbiReEncode } = await deployDeterministicInbox({
+      const feeLabel = ctx.feeManagerSaltLabel;
+      const { inbox, alreadyDeployed, mpcAbiReEncode, feeManager } = await deployDeterministicInbox({
         viem: ctx.viem,
         publicClient: ctx.publicClient,
         walletClient: ctx.walletClient,
         saltLabel: ctx.inboxSaltLabel,
         deployReEncode: ctx.isCoti,
         reEncodeSaltLabel: ctx.isCoti ? codecLabel : undefined,
+        feeManagerSaltLabel: feeLabel,
       });
+      {
+        const feeSalt = buildInboxSalt(ctx.deployer, feeLabel);
+        await recordFeeManagerSalt({
+          label: feeLabel,
+          deployer: ctx.deployer,
+          salt: feeSalt,
+          guardedSalt: computeGuardedSalt(ctx.deployer, feeSalt),
+          address: feeManager,
+        });
+        {
+          const cfg = await readCfg();
+          chainEntry(cfg, ctx.chainId).feeManager = feeManager;
+          await writeCfg(cfg);
+        }
+        console.log(`  feeManager ${feeManager} (salt label ${feeLabel})`);
+      }
       if (ctx.isCoti && mpcAbiReEncode && mpcAbiReEncode !== zeroAddress) {
+        if (alreadyDeployed) {
+          const onChainCodec = getAddress((await inbox.read.mpcAbiReEncode()) as Address);
+          if (onChainCodec !== getAddress(mpcAbiReEncode)) {
+            throw new Error(
+              `Inbox already at CREATE3 address but mpcAbiReEncode is ${onChainCodec} ` +
+                `(codec deploy resolved ${mpcAbiReEncode}). Refusing to record codec success: ` +
+                `remount Inbox (bump deployConfig.inboxSalt.label) so init wires the codec.`
+            );
+          }
+        }
         const codecSalt = buildInboxSalt(ctx.deployer, codecLabel);
         await recordMpcAbiCodecSalt({
           label: codecLabel,
@@ -825,6 +891,9 @@ const TARGETS: Target[] = [
       );
       console.log(
         "  If bytecode changes, bump deployConfig.inboxSalt.label (and clear salt/address) before redeploy."
+      );
+      console.log(
+        "  FeeManager is a DELEGATECALL helper; apps still bind only the Inbox address."
       );
       console.log("  Next: priceOracle (setInboxTokens → seed → refreshCache), then feeConfig, then wireInboxOracle");
       return inbox.address as Address;
@@ -1824,7 +1893,9 @@ const main = async () => {
   const { chainId, publicClient, walletClient } = await getViemClients(viem, provider, networkName);
   const deployer = await resolveDeployerAddress(walletClient);
   const inboxSaltLabel = readInboxSaltLabel(await readCfg());
-  const mpcAbiCodecSaltLabel = readMpcAbiCodecSaltLabel(await readCfg());
+  const isCoti = net.role === "coti";
+  const mpcAbiCodecSaltLabel = readMpcAbiCodecSaltLabel(await readCfg(), isCoti);
+  const feeManagerSaltLabel = readFeeManagerSaltLabel(await readCfg());
   const inboxSalt = buildInboxSalt(deployer, inboxSaltLabel);
   const inboxAddress = await precomputeCreate3Address(publicClient, deployer, inboxSalt);
   // Keep deployConfig.inboxSalt in sync with the resolved deterministic inputs.
@@ -1844,7 +1915,6 @@ const main = async () => {
     console.log(`Runbook: ${saltMeta.runbook}`);
   }
 
-  const isCoti = net.role === "coti";
   if (isCoti) {
     const codecSalt = buildInboxSalt(deployer, mpcAbiCodecSaltLabel);
     const codecAddress = await precomputeCreate3Address(publicClient, deployer, codecSalt);
@@ -1858,6 +1928,19 @@ const main = async () => {
     console.log(`MpcAbiReEncode CREATE3 (COTI): ${codecAddress} (label ${mpcAbiCodecSaltLabel})`);
   }
 
+  {
+    const feeSalt = buildInboxSalt(deployer, feeManagerSaltLabel);
+    const feeAddress = await precomputeCreate3Address(publicClient, deployer, feeSalt);
+    await recordFeeManagerSalt({
+      label: feeManagerSaltLabel,
+      deployer,
+      salt: feeSalt,
+      guardedSalt: computeGuardedSalt(deployer, feeSalt),
+      address: feeAddress,
+    });
+    console.log(`FeeManager CREATE3: ${feeAddress} (label ${feeManagerSaltLabel})`);
+  }
+
   const ctx: DeployCtx = {
     viem,
     publicClient,
@@ -1868,6 +1951,7 @@ const main = async () => {
     inboxAddress,
     inboxSaltLabel,
     mpcAbiCodecSaltLabel,
+    feeManagerSaltLabel,
     isCoti,
   };
 
