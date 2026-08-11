@@ -836,6 +836,16 @@ const TARGETS: Target[] = [
       });
       {
         const feeSalt = buildInboxSalt(ctx.deployer, feeLabel);
+        if (alreadyDeployed) {
+          const onChainFeeManager = getAddress((await inbox.read.feeManager()) as Address);
+          if (onChainFeeManager !== getAddress(feeManager)) {
+            throw new Error(
+              `Inbox already at CREATE3 address but feeManager is ${onChainFeeManager} ` +
+                `(FeeManager deploy resolved ${feeManager}). Refusing to record FeeManager success: ` +
+                `remount Inbox (bump deployConfig.inboxSalt.label) so init wires FeeManager.`
+            );
+          }
+        }
         await recordFeeManagerSalt({
           label: feeLabel,
           deployer: ctx.deployer,

@@ -1867,6 +1867,16 @@ export const deployDeterministicInbox = async (params: {
       );
     }
   }
+  if (result.alreadyDeployed) {
+    const onChainFeeManager = getAddress((await inbox.read.feeManager()) as Address);
+    if (onChainFeeManager !== feeManager) {
+      throw new Error(
+        `deployDeterministicInbox: Inbox at ${result.address} already deployed with feeManager=` +
+          `${onChainFeeManager}, but deployed/expected FeeManager is ${feeManager}. ` +
+          `Remount the Inbox (bump deployConfig.inboxSalt.label) so init can wire FeeManager.`
+      );
+    }
+  }
   return {
     ...result,
     inbox,
