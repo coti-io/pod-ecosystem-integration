@@ -277,6 +277,30 @@ export const deployInboxDeterministic = async (
         );
       }
     }
+    const expectedFeeManager = getAddress(feeManager);
+    const onChainFeeManager = getAddress(
+      (await publicClient.readContract({
+        address: predictedAddress,
+        abi: [
+          {
+            type: "function",
+            name: "feeManager",
+            stateMutability: "view",
+            inputs: [],
+            outputs: [{ name: "", type: "address" }],
+          },
+        ],
+        functionName: "feeManager",
+      })) as Address
+    );
+    if (onChainFeeManager !== expectedFeeManager) {
+      throw new Error(
+        `Inbox already deployed at ${predictedAddress} but feeManager is ${onChainFeeManager} ` +
+          `(expected ${expectedFeeManager}). CREATE3 skips init on existing code, so FeeManager cannot be ` +
+          `wired in place. Remount the Inbox (bump deployConfig.inboxSalt.label and clear ` +
+          `salt/address) so a fresh deployCreate3AndInit wires FeeManager, then redeploy.`
+      );
+    }
     return { address: predictedAddress, predictedAddress, alreadyDeployed: true };
   }
 
