@@ -46,6 +46,7 @@ import {
   wireOracleToFactory,
   wireOracleToInbox,
   COTI_ADMIN_WRITE_GAS,
+  DEPLOY_CONTRACT_GAS,
   ensureGasFunds,
 } from "./deploy-utils.js";
 import {
@@ -362,6 +363,7 @@ const getInbox = (ctx: DeployCtx) =>
 const deploySimple = async (ctx: DeployCtx, name: string, args: unknown[]): Promise<Address> => {
   const c = await ctx.viem.deployContract(name, args, {
     client: { public: ctx.publicClient, wallet: ctx.walletClient },
+    gas: DEPLOY_CONTRACT_GAS,
   });
   return c.address as Address;
 };
@@ -400,6 +402,7 @@ const maybeTransferOwnable = async (
     functionName: "transferOwnership",
     args: [desiredOwner],
     account: ctx.deployer,
+    gas: COTI_ADMIN_WRITE_GAS,
   });
   await waitMined(ctx.publicClient, hash);
   console.log(`  ${label}: transferred ownership to ${desiredOwner}`);
@@ -442,6 +445,7 @@ const configureMpcAdder = async (ctx: DeployCtx, adderAddress: Address): Promise
   const deployer = await resolveDeployerAddress(ctx.walletClient);
   const hash = await adder.write.configure(podConfigureKeepInbox(executor, cotiChainId), {
     account: deployer,
+    gas: COTI_ADMIN_WRITE_GAS,
   });
   await waitMined(ctx.publicClient, hash);
   console.log(`  configured MpcAdder -> executor ${executor} (cotiChainId ${cotiChainId})`);
@@ -749,9 +753,28 @@ const buildPpTokenTargets = (): Target[] => {
           (entry.motherRegistrationRequestId as `0x${string}` | undefined) || undefined;
         const wrapNative = live.canonicalKey === "WETH" || live.canonicalKey === "WAVAX";
         if (!isAddr(portal)) {
+          // One-way mother registration fee: quote remote constant-fee floor in local wei.
+          // Hardcoded 0.001 ETH over-credits remote gas vs maxExecutionGas (FeeGasTooHigh).
+          const inbox = await ctx.viem.getContractAt("Inbox", ctx.inboxAddress, {
+            client: { public: ctx.publicClient, wallet: ctx.walletClient },
+          });
+          const minGasPrice = (await inbox.read.minGasPriceWei()) as bigint;
+          const block = await ctx.publicClient.getBlock();
+          const base = block.baseFeePerGas ?? 0n;
+          const gasPrice = base > minGasPrice ? base : minGasPrice;
+          const [targetFeeLocalWei] = (await inbox.read.calculateTwoWayFeeRequiredInLocalToken([
+            0n,
+            0n,
+            0n,
+            0n,
+            gasPrice,
+          ])) as readonly [bigint, bigint];
+          // Tiny pad under maxExecutionGas headroom (avoid FeeGasTooHigh from overpay).
+          const motherRegValue = targetFeeLocalWei + targetFeeLocalWei / 50n;
+          console.log(`  ${t.key} createPortal mother-reg fee value=${motherRegValue} wei (gasPrice=${gasPrice})`);
           const hash = await factory.write.createPortal(
             [underlying, live.pName, live.pSymbol, live.decimals, wrapNative],
-            { account: ctx.deployer, value: 1_000_000_000_000_000n }
+            { account: ctx.deployer, value: motherRegValue, gas: DEPLOY_CONTRACT_GAS }
           );
           const receipt = await waitMined(ctx.publicClient, hash);
           portal = (await factory.read.portalForUnderlying([underlying])) as Address;

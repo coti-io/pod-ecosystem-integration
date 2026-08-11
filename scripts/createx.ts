@@ -176,6 +176,32 @@ export type DeployCreate3Params = {
  * Deterministically deploy arbitrary initCode via CreateX `deployCreate3` (no post-deploy init call).
  * Used for storage-free helpers such as {MpcAbiReEncode} that have no initializer.
  */
+
+/** Fuji (and some public RPCs) break wallet-side eth_estimateGas with "exceeds block gas limit". */
+const gasForCreate3Write = async (params: {
+  publicClient: PublicClient;
+  deployer: Address;
+  data: Hex;
+  /** Creation bytecode length hint for fallback when estimateGas fails. */
+  initCodeBytes: number;
+  /** Extra headroom for deployCreate3AndInit (init calldata). */
+  initOverheadGas?: bigint;
+}): Promise<bigint> => {
+  const { publicClient, deployer, data, initCodeBytes, initOverheadGas = 0n } = params;
+  try {
+    const estimated = await publicClient.estimateGas({
+      account: deployer,
+      to: CREATEX_ADDRESS,
+      data,
+    });
+    return estimated + estimated / 5n;
+  } catch {
+    // CREATE cost ≈ 32k + 200/byte + CreateX/CREATE3 overhead + optional init.
+    const fallback = 1_500_000n + BigInt(initCodeBytes) * 200n + initOverheadGas;
+    return fallback;
+  }
+};
+
 export const deployCreate3Deterministic = async (
   params: DeployCreate3Params
 ): Promise<DeployInboxDeterministicResult> => {
@@ -209,7 +235,18 @@ export const deployCreate3Deterministic = async (
     );
   }
 
-  const txHash = await walletClient.writeContract(request);
+  const data = encodeFunctionData({
+    abi: CREATEX_ABI,
+    functionName: "deployCreate3",
+    args: [salt, bytecode],
+  });
+  const gas = await gasForCreate3Write({
+    publicClient,
+    deployer,
+    data,
+    initCodeBytes: (bytecode.length - 2) / 2,
+  });
+  const txHash = await walletClient.writeContract({ ...request, gas });
   await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 300_000, pollingInterval: 2_000 });
 
   return { address: predictedAddress, predictedAddress, txHash, alreadyDeployed: false };
@@ -331,7 +368,23 @@ export const deployInboxDeterministic = async (
     );
   }
 
-  const txHash = await walletClient.writeContract(request);
+  const gas = await gasForCreate3Write({
+    publicClient,
+    deployer,
+    data: encodeFunctionData({
+      abi: CREATEX_ABI,
+      functionName: "deployCreate3AndInit",
+      args: [
+        salt,
+        artifact.bytecode,
+        initData,
+        { constructorAmount: 0n, initCallAmount: 0n },
+      ],
+    }),
+    initCodeBytes: (artifact.bytecode.length - 2) / 2,
+    initOverheadGas: 3_000_000n,
+  });
+  const txHash = await walletClient.writeContract({ ...request, gas });
   await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 300_000, pollingInterval: 2_000 });
 
   return { address: predictedAddress, predictedAddress, txHash, alreadyDeployed: false };

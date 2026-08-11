@@ -38,11 +38,10 @@ import {
   decodeCtUint64,
   estimateGas,
   getLatestRequest,
+  getRequests,
   getResponseRequestBySource,
   getTupleField,
-  onboardUser,
   parseRequest,
-  podTwoWayWriteOptions,
   receiptWaitOptions,
   type Request,
 } from "../test/system/mpc-test-utils.js";
@@ -331,15 +330,18 @@ const printChainConfig = async (
       row("mpcAdder", "(not deployed)", false);
     } else {
       const adder = await getContract(clients, "MpcAdder", adderAddr);
-      const [adderInbox, mpcExecutor, cotiChainId] = await Promise.all([
+      // mpcExecutorAddress / cotiChainId are internal; configure() also sets trustedRemote[cotiChainId].
+      const [adderInbox, trustedExec] = await Promise.all([
         adder.read.inbox() as Promise<Address>,
-        adder.read.mpcExecutor() as Promise<Address>,
-        adder.read.cotiChainId() as Promise<bigint>,
+        adder.read.trustedRemote([BigInt(COTI_TESTNET_CHAIN_ID)]) as Promise<Address>,
       ]);
       row("address", adderAddr, true);
       row("inbox()", adderInbox, adderInbox.toLowerCase() === inboxAddr.toLowerCase());
-      row("mpcExecutor()", mpcExecutor === zeroAddress ? "(unset)" : mpcExecutor, mpcExecutor !== zeroAddress);
-      row("cotiChainId()", String(cotiChainId), Number(cotiChainId) === COTI_TESTNET_CHAIN_ID);
+      row(
+        `trustedRemote(${COTI_TESTNET_CHAIN_ID})`,
+        trustedExec === zeroAddress ? "(unset)" : trustedExec,
+        trustedExec !== zeroAddress
+      );
     }
   } else {
     section("MpcExecutor");
@@ -397,11 +399,15 @@ const runAddRoundTrip = async (params: {
   const sourceInbox = await getContract(source, "Inbox", sourceInboxAddr);
   const cotiInbox = await getContract(coti, "Inbox", cotiInboxAddr);
   const adder = await getContract(source, "MpcAdder", adderAddr);
+  // estimateGas / calculateTwoWayFeeRequiredInLocalToken reads oracle via inbox._publicClient.
+  (sourceInbox as any)._publicClient = source.publicClient;
+  (cotiInbox as any)._publicClient = coti.publicClient;
 
-  const mpcExecutor = (await adder.read.mpcExecutor()) as Address;
-  if (mpcExecutor.toLowerCase() !== executorAddr.toLowerCase()) {
+  // mpcExecutorAddress is internal; trustedRemote is set by configure() to the same executor.
+  const trustedExec = (await adder.read.trustedRemote([BigInt(COTI_TESTNET_CHAIN_ID)])) as Address;
+  if (trustedExec.toLowerCase() !== executorAddr.toLowerCase()) {
     throw new Error(
-      `MpcAdder.mpcExecutor ${mpcExecutor} != deployConfig cotiExecutor ${executorAddr}. Run ConfigureAdder.`
+      `MpcAdder.trustedRemote(${COTI_TESTNET_CHAIN_ID}) ${trustedExec} != deployConfig cotiExecutor ${executorAddr}. Run ConfigureAdder.`
     );
   }
 
@@ -417,10 +423,16 @@ const runAddRoundTrip = async (params: {
     resolveRpcUrl(COTI_TESTNET_CHAIN_ID);
   const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
   console.log(`  onboarding AES key via ${onboardAddress} on ${cotiRpc}…`);
-  const userKey = await onboardUser(cotiPk, cotiRpc, onboardAddress);
+  // Live verify must NOT use onboardUser() here: under Hardhat, isSimCotiBackend() can be
+  // true and returns deriveSimAesKey, which does not match live AccountOnboard / MPC.
   const cotiProvider = new JsonRpcProvider(cotiRpc) as any;
   const cotiEncryptWallet = new CotiWallet(cotiPk.startsWith("0x") ? cotiPk : `0x${cotiPk}`, cotiProvider);
-  cotiEncryptWallet.setAesKey(userKey);
+  await cotiEncryptWallet.generateOrRecoverAes(onboardAddress);
+  let userKey = cotiEncryptWallet.getUserOnboardInfo()?.aesKey;
+  if (!userKey) throw new Error("Failed to recover AES key from AccountOnboard");
+  if (userKey.startsWith("0x")) userKey = userKey.slice(2);
+  cotiEncryptWallet.setUserOnboardInfo({ aesKey: userKey });
+  console.log(`  AES key recovered (len=${userKey.length})`);
 
   const encryptCtx = {
     crypto: { userKey, cotiEncryptWallet },
@@ -434,9 +446,14 @@ const runAddRoundTrip = async (params: {
   row("fee estimate totalWei", formatEther(fees.totalValueWei));
   row("fee estimate callbackWei", formatEther(fees.callbackFeeWei));
 
-  const writeOpts = podTwoWayWriteOptions(fees);
-  // Live testnets: let the node estimate gas (Hardhat pad is oversized for EIP-1559).
-  const liveOpts = { value: writeOpts.value, account: source.walletClient.account };
+  // estimateGas already pads ~5%. Do not use podTwoWayWriteOptions.value (another +5%) —
+  // that over-credits remote gas units and hits FeeGasTooHigh against maxExecutionGas.
+  // Explicit gas: some RPCs (Fuji) fail eth_estimateGas with "exceeds block gas limit".
+  const liveOpts = {
+    value: fees.totalValueWei,
+    account: source.walletClient.account,
+    gas: 2_500_000n,
+  };
   console.log(`  sending MpcAdder.add value=${formatEther(liveOpts.value)} ETH…`);
   const txHash = await adder.write.add([itA, itB, fees.callbackFeeWei], liveOpts);
   await source.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
@@ -455,15 +472,52 @@ const runAddRoundTrip = async (params: {
   );
 
   section("Mine COTI leg (source → COTI)");
-  await mineInbound({
-    label: `${source.label}->COTI`,
-    inbox: cotiInbox,
-    publicClient: coti.publicClient,
-    walletClient: coti.walletClient,
-    sourceChainId: BigInt(source.chainId),
-    request: outbound,
-    chainLabel: "COTI",
-  });
+  // InboxMiner requires contiguous nonces vs lastIncomingRequestId — drain any backlog first.
+  const lastIncoming = (await cotiInbox.read.lastIncomingRequestId([BigInt(source.chainId)])) as `0x${string}`;
+  let nextNonce = 1n;
+  if (lastIncoming && lastIncoming !== ("0x" + "00".repeat(32))) {
+    const unpacked = (await cotiInbox.read.unpackRequestId([lastIncoming])) as readonly [bigint, bigint, bigint];
+    nextNonce = unpacked[2] + 1n;
+  }
+  const totalOutbound = Number(await sourceInbox.read.getRequestsLen([BigInt(COTI_TESTNET_CHAIN_ID)]));
+  for (let idx = 0; idx < totalOutbound; idx++) {
+    const batch = await getRequests(sourceInbox, BigInt(COTI_TESTNET_CHAIN_ID), idx, 1);
+    const req = batch[0];
+    if (!req) continue;
+    const unpacked = (await sourceInbox.read.unpackRequestId([req.requestId])) as readonly [
+      bigint,
+      bigint,
+      bigint,
+    ];
+    const nonce = unpacked[2];
+    if (nonce < nextNonce) continue;
+    if (nonce > nextNonce) {
+      throw new Error(
+        `${source.label}: missing outbound nonce ${nextNonce} (found ${nonce}); cannot mine contiguous`
+      );
+    }
+    const isLatest = req.requestId.toLowerCase() === outbound.requestId.toLowerCase();
+    console.log(`  mining COTI nonce=${nonce}${isLatest ? " (round-trip)" : " (backlog)"}…`);
+    try {
+      await mineInbound({
+        label: `${source.label}->COTI`,
+        inbox: cotiInbox,
+        publicClient: coti.publicClient,
+        walletClient: coti.walletClient,
+        sourceChainId: BigInt(source.chainId),
+        request: req,
+        chainLabel: "COTI",
+      });
+    } catch (err) {
+      if (isLatest) throw err;
+      console.warn(
+        `  backlog nonce ${nonce} mine/exec failed (continuing):`,
+        err instanceof Error ? err.message : err
+      );
+    }
+    nextNonce = nonce + 1n;
+    if (isLatest) break;
+  }
 
   const err = await cotiInbox.read.errors([outbound.requestId]);
   const errId = getTupleField(err, "requestId", 0);
