@@ -33,8 +33,8 @@ import {
 import { JsonRpcProvider } from "ethers";
 
 /**
- * Native `msg.value` split for two-way Pod / inbox calls (JS mirror of {InboxFeeQuoter};
- * Inbox no longer exposes `calculateTwoWayFeeRequiredInLocalToken` on its ABI).
+ * Native `msg.value` split for two-way Pod / inbox calls (JS mirror of Inbox
+ * `calculateTwoWayFeeRequiredInLocalToken` / {InboxFeeQuoter}).
  *
  * **Not comparable to `Request.targetFee` / `Request.callerFee` on-chain** — those are **gas unit** budgets, not wei
  * (`FeeManager.validateAndPrepareTwoWayFees` via Inbox DELEGATECALL):
@@ -369,28 +369,31 @@ export async function calculateTwoWayFeeRequiredInLocalToken(
     throw new Error("calculateTwoWayFeeRequiredInLocalToken: inbox.priceOracle() is unset");
   }
 
-  let localPrice = 10n ** 18n;
-  let remotePrice = 10n ** 18n;
   const client = (inbox as any)._publicClient ?? (inbox as any).client?.public;
-  if (client?.readContract) {
-    const prices = (await client.readContract({
-      address: oracleAddr,
-      abi: [
-        {
-          type: "function",
-          name: "getPricesUSD",
-          stateMutability: "view",
-          inputs: [],
-          outputs: [
-            { name: "localPrice", type: "uint256" },
-            { name: "remotePrice", type: "uint256" },
-          ],
-        },
-      ],
-      functionName: "getPricesUSD",
-    })) as [bigint, bigint];
-    [localPrice, remotePrice] = prices;
+  if (!client?.readContract) {
+    throw new Error(
+      "calculateTwoWayFeeRequiredInLocalToken: public client missing — " +
+        "attach via ensureMpcInboxOracleAndFees (or set inbox._publicClient); " +
+        "refusing silent 1:1 price fallback"
+    );
   }
+  const prices = (await client.readContract({
+    address: oracleAddr,
+    abi: [
+      {
+        type: "function",
+        name: "getPricesUSD",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [
+          { name: "localPrice", type: "uint256" },
+          { name: "remotePrice", type: "uint256" },
+        ],
+      },
+    ],
+    functionName: "getPricesUSD",
+  })) as [bigint, bigint];
+  const [localPrice, remotePrice] = prices;
 
   let targetGasRemote = expectedMinFeeGasUnits(remoteMethodCallSize, remote) + remoteMethodExecutionGas;
   let callerGasLocal = expectedMinFeeGasUnits(callBackMethodCallSize, local) + callBackMethodExecutionGas;

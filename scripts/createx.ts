@@ -286,7 +286,7 @@ export const deployInboxDeterministic = async (
     args: [
       deployer,
       chainId,
-      mpcAbiReEncode ?? ("0x0000000000000000000000000000000000000000" as Address),
+      mpcAbiReEncode ?? zeroAddress,
       feeManager,
     ],
   });

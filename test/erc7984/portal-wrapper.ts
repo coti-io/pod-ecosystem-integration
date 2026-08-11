@@ -54,7 +54,8 @@ describe("ERC-7984 portal wrapper events", { concurrency: 1 }, async function ()
     );
 
     await fundUserAndApprovePortal(ctx, 100n);
-    const wrapHash = await ctx.portal.write.wrap([ctx.recipient, 25n, 0n, 77n], {
+    // wrap(to, amount, mintCallbackFee) — portal fee floor is taken from config (0 with MockPrivacyPortalFactory).
+    const wrapHash = await ctx.portal.write.wrap([ctx.recipient, 25n, 77n], {
       account: owner,
       value: 1_000n,
     });

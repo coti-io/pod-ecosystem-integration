@@ -1,0 +1,172 @@
+# Ecosystem Hardhat gate: sibling file: checkouts + in-mem + sim inbox gas.
+# Triggers: PEI PRs/main, workflow_dispatch, repository_dispatch (pod-contracts-changed).
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      inbox_ref:
+        description: coti-pod-inbox-contracts ref (branch/SHA)
+        required: false
+        default: main
+      contracts_ref:
+        description: coti-contracts ref (branch/SHA)
+        required: false
+        default: main
+      sim_ref:
+        description: sim-coti-node ref (branch/SHA)
+        required: false
+        default: main
+  repository_dispatch:
+    types: [pod-contracts-changed]
+
+concurrency:
+  group: pei-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.client_payload.sha || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_OPTIONS: --max-old-space-size=8192
+
+jobs:
+  resolve-refs:
+    runs-on: ubuntu-latest
+    outputs:
+      inbox_ref: ${{ steps.refs.outputs.inbox_ref }}
+      contracts_ref: ${{ steps.refs.outputs.contracts_ref }}
+      sim_ref: ${{ steps.refs.outputs.sim_ref }}
+    steps:
+      - id: refs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_REPO: ${{ github.event.client_payload.repo }}
+          DISPATCH_SHA: ${{ github.event.client_payload.sha }}
+          INPUT_INBOX: ${{ github.event.inputs.inbox_ref }}
+          INPUT_CONTRACTS: ${{ github.event.inputs.contracts_ref }}
+          INPUT_SIM: ${{ github.event.inputs.sim_ref }}
+        run: |
+          inbox_ref="${INPUT_INBOX:-main}"
+          contracts_ref="${INPUT_CONTRACTS:-main}"
+          sim_ref="${INPUT_SIM:-main}"
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            case "$DISPATCH_REPO" in
+              *coti-pod-inbox-contracts*) inbox_ref="${DISPATCH_SHA}" ;;
+              *coti-contracts*) contracts_ref="${DISPATCH_SHA}" ;;
+              *sim-coti-node*) sim_ref="${DISPATCH_SHA}" ;;
+            esac
+          fi
+          {
+            echo "inbox_ref=$inbox_ref"
+            echo "contracts_ref=$contracts_ref"
+            echo "sim_ref=$sim_ref"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved refs: inbox=$inbox_ref contracts=$contracts_ref sim=$sim_ref"
+
+  in-mem:
+    needs: resolve-refs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout PEI
+        uses: actions/checkout@v4
+        with:
+          path: pod-ecosystem-integration
+
+      - name: Checkout coti-pod-inbox-contracts
+        uses: actions/checkout@v4
+        with:
+          repository: coti-io/coti-pod-inbox-contracts
+          ref: ${{ needs.resolve-refs.outputs.inbox_ref }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: coti-pod-inbox-contracts
+
+      - name: Checkout coti-contracts
+        uses: actions/checkout@v4
+        with:
+          repository: coti-io/coti-contracts
+          ref: ${{ needs.resolve-refs.outputs.contracts_ref }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: coti-contracts
+
+      - name: Checkout sim-coti-node
+        uses: actions/checkout@v4
+        with:
+          repository: cotitech-io/sim-coti-node
+          ref: ${{ needs.resolve-refs.outputs.sim_ref }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: sim-coti-node
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: pod-ecosystem-integration/package-lock.json
+
+      - name: Install PEI (+ file: siblings)
+        working-directory: pod-ecosystem-integration
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Compile
+        working-directory: pod-ecosystem-integration
+        run: npx hardhat compile
+
+      - name: In-mem Hardhat tests
+        working-directory: pod-ecosystem-integration
+        run: npm run test:ci:in-mem
+
+  sim:
+    needs: resolve-refs
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout PEI
+        uses: actions/checkout@v4
+        with:
+          path: pod-ecosystem-integration
+
+      - name: Checkout coti-pod-inbox-contracts
+        uses: actions/checkout@v4
+        with:
+          repository: coti-io/coti-pod-inbox-contracts
+          ref: ${{ needs.resolve-refs.outputs.inbox_ref }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: coti-pod-inbox-contracts
+
+      - name: Checkout coti-contracts
+        uses: actions/checkout@v4
+        with:
+          repository: coti-io/coti-contracts
+          ref: ${{ needs.resolve-refs.outputs.contracts_ref }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: coti-contracts
+
+      - name: Checkout sim-coti-node
+        uses: actions/checkout@v4
+        with:
+          repository: cotitech-io/sim-coti-node
+          ref: ${{ needs.resolve-refs.outputs.sim_ref }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: sim-coti-node
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: pod-ecosystem-integration/package-lock.json
+
+      - name: Install PEI (+ file: siblings)
+        working-directory: pod-ecosystem-integration
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Compile
+        working-directory: pod-ecosystem-integration
+        run: npx hardhat compile
+
+      - name: Sim inbox gas suites
+        working-directory: pod-ecosystem-integration
+        run: npm run test:ci:sim
