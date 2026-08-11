@@ -34,8 +34,12 @@ Open [`pod-ecosystem.code-workspace`](./pod-ecosystem.code-workspace) for multi-
 
 ## Tests
 
+Hardhat scripts set `NODE_OPTIONS=--max-old-space-size=8192` to avoid Node OOM. Live-RPC / system suites stay gated (`COTI_BACKEND=sim`, `*_SYSTEM_TESTS`, etc.) unless secrets + flags are present.
+
 | Command | Description |
 |---------|-------------|
+| `npm test` / `test:ci:in-mem` | Default in-mem Hardhat (system suites skipped) |
+| `npm run test:ci:sim` | Sim inbox estimate + mine gas (`COTI_BACKEND=sim`) |
 | `npm run test:erc7984` | ERC-7984 compat (local) |
 | `npm run test:pp-system` | Privacy Portal system (`PP_SYSTEM_TESTS=1`) |
 | `npm run test:pp-mainnet-smoke` | Read-only mainnet config + optional code checks |
@@ -43,6 +47,21 @@ Open [`pod-ecosystem.code-workspace`](./pod-ecosystem.code-workspace) for multi-
 | `npm run test:executor-coti` | COTI MPC executor |
 
 Inbox-only tests live in **coti-pod-inbox-contracts** (`test:inbox-events`, `test:inbox-fee`, etc.).
+
+### GitHub Actions
+
+`.github/workflows/ci.yml` checks out this repo plus sibling `file:` deps (`coti-pod-inbox-contracts`, `coti-contracts`, `sim-coti-node`) and runs **in-mem** and **sim** jobs.
+
+| Trigger | Sibling refs |
+|---------|----------------|
+| PEI `pull_request` / `push` to `main` | siblings default to `main` |
+| `workflow_dispatch` | optional `inbox_ref` / `contracts_ref` / `sim_ref` |
+| `repository_dispatch` type `pod-contracts-changed` | uses `client_payload.repo` + `sha` for the changed sibling |
+
+**Secrets**
+
+- `CROSS_REPO_PAT` — PAT that can read `coti-io/*` and private `cotitech-io/sim-coti-node` (required for sim checkout; also used for sibling checkouts).
+- Sender repos (`coti-pod-inbox-contracts`, `coti-contracts`) need `PEI_DISPATCH_PAT` with permission to create `repository_dispatch` on this repo.
 
 ## Deploy
 

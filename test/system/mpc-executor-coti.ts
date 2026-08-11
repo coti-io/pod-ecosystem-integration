@@ -8,7 +8,8 @@
  *
  * COTI `decrypt` is not reliable under `eth_call`; use transactions + `read` getters.
  *
- * Requires: `COTI_TESTNET_RPC_URL`, and `COTI_TESTNET_PRIVATE_KEY` or `PRIVATE_KEY`.
+ * Requires: `COTI_SYSTEM_TESTS=1` (or `COTI_BACKEND=sim`), plus `COTI_TESTNET_RPC_URL`, and
+ * `COTI_TESTNET_PRIVATE_KEY` or `PRIVATE_KEY`.
  *
  * Run: `npm run test:executor-coti`
  *
@@ -43,7 +44,10 @@ const cotiRpc = process.env.COTI_TESTNET_RPC_URL?.trim();
 const cotiPkRaw =
   process.env.COTI_TESTNET_PRIVATE_KEY?.trim() || process.env.PRIVATE_KEY?.trim();
 
-const canRunCoti = Boolean(cotiRpc && cotiPkRaw);
+/** Same gate as other COTI system tests — credentials alone must not run this under plain `npm test`. */
+const runCotiSystem = process.env.COTI_SYSTEM_TESTS === "1" || process.env.COTI_BACKEND === "sim";
+const canRunCoti = Boolean(runCotiSystem && cotiRpc && cotiPkRaw);
+const describeCoti = runCotiSystem ? describe : describe.skip;
 
 const deployGasOpt = (() => {
   const raw = process.env.MPC_COTI_CONTRACT_DEPLOY_GAS?.trim();
@@ -52,7 +56,7 @@ const deployGasOpt = (() => {
 })();
 const deployGas = "gas" in deployGasOpt ? deployGasOpt.gas : undefined;
 
-describe("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 }, async function () {
+describeCoti("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 }, async function () {
   if (!canRunCoti) {
     it.skip(
       "set COTI_TESTNET_RPC_URL and COTI_TESTNET_PRIVATE_KEY (or PRIVATE_KEY) to run this file",

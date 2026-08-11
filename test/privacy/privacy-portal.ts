@@ -215,10 +215,15 @@ describe("PrivacyPortal", { concurrency: 1 }, async function () {
     await requestWithdraw(nativeCtx, 300n);
 
     const recipientEthBefore = await publicClient.getBalance({ address: nativeCtx.recipient });
+    const recipientWethBefore = (await nativeCtx.underlying.read.balanceOf([nativeCtx.recipient])) as bigint;
     await completePTokenTransferCallback(nativeCtx);
 
-    assert.equal(await nativeCtx.underlying.read.balanceOf([nativeCtx.recipient]), 300n);
-    assert.equal(await publicClient.getBalance({ address: nativeCtx.recipient }), recipientEthBefore);
+    // nativeWrappedUnderlying: portal unwraps WETH and sends native coin to the recipient.
+    assert.equal(await nativeCtx.underlying.read.balanceOf([nativeCtx.recipient]), recipientWethBefore);
+    assert.equal(
+      await publicClient.getBalance({ address: nativeCtx.recipient }),
+      recipientEthBefore + 300n
+    );
   });
 
   it("refunds deposit only after SystemFailed mint (not app Failed)", async function () {
