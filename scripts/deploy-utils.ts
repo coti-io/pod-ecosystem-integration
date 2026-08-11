@@ -57,6 +57,9 @@ export const waitMined = async (publicClient: unknown, hash: `0x${string}`) => {
 /** Enough gas for `PriceOracle` admin price sets on COTI (large uint256 args can underestimate). */
 export const COTI_ADMIN_WRITE_GAS = 500_000n;
 
+/** Explicit create gas — Fuji wallet eth_estimateGas often returns exceeds block gas limit. */
+export const DEPLOY_CONTRACT_GAS = 8_000_000n;
+
 /** COTI testnet faucet (Discord bot: `testnet <address>`). */
 export const COTI_TESTNET_FAUCET_HINT =
   "https://docs.coti.io/coti-documentation/build-on-coti/tools/remix-plugin (Discord faucet: testnet <address>)";
@@ -1172,6 +1175,7 @@ export const deployTestnetPriceOracle = async (params: DeployOracleParams) => {
   const oracle = await viem.deployContract("PriceOracle", [owner], {
     client: { public: publicClient, wallet: walletClient },
     account: deployer,
+    gas: DEPLOY_CONTRACT_GAS,
   });
 
   const { localToken, remoteToken } = oracleTokensForChain(chainId);
@@ -1299,7 +1303,7 @@ export const deployLiveOracleAdapter = async (
     const contract = await viem.deployContract(
       "BandLiveOracle",
       [owner, bandRef, maxStaleness],
-      { client: { public: publicClient, wallet: walletClient }, account: deployer }
+      { client: { public: publicClient, wallet: walletClient }, account: deployer, gas: DEPLOY_CONTRACT_GAS }
     );
     return { address: contract.address as `0x${string}`, contractName: "BandLiveOracle" };
   }
@@ -1307,7 +1311,7 @@ export const deployLiveOracleAdapter = async (
   const contract = await viem.deployContract(
     "ChainlinkLiveOracle",
     [owner, maxStaleness],
-    { client: { public: publicClient, wallet: walletClient }, account: deployer }
+    { client: { public: publicClient, wallet: walletClient }, account: deployer, gas: DEPLOY_CONTRACT_GAS }
   );
   return { address: contract.address as `0x${string}`, contractName: "ChainlinkLiveOracle" };
 };
@@ -1325,14 +1329,14 @@ export const deployPodPriceOracle = async (
   const oracle = (await viem.deployContract(
     "PoDPriceOracle",
     [owner, liveAdapter, fetchInterval],
-    { client: { public: publicClient, wallet: walletClient }, account: deployer }
+    { client: { public: publicClient, wallet: walletClient }, account: deployer, gas: DEPLOY_CONTRACT_GAS }
   )) as PodOracleContract;
 
   const priceAdmin = (params.priceAdmin ?? owner) as `0x${string}`;
   if (priceAdmin.toLowerCase() !== owner.toLowerCase()) {
     // Deployer must still be Ownable owner to call setPriceAdmin — only works when owner===deployer.
     if (owner.toLowerCase() === deployer.toLowerCase()) {
-      const h = await oracle.write.setPriceAdmin([priceAdmin], { account: deployer });
+      const h = await oracle.write.setPriceAdmin([priceAdmin], { account: deployer, gas: COTI_ADMIN_WRITE_GAS });
       await waitMined(publicClient, h);
     } else {
       console.warn(
@@ -1574,7 +1578,10 @@ export const wireOracleToInbox = async (params: {
   walletClient: WalletClient;
 }): Promise<void> => {
   const deployer = await resolveDeployerAddress(params.walletClient);
-  const hash = await params.inbox.write.setPriceOracle([params.oracleAddress], { account: deployer });
+  const hash = await params.inbox.write.setPriceOracle([params.oracleAddress], {
+    account: deployer,
+    gas: COTI_ADMIN_WRITE_GAS,
+  });
   await waitMined(params.publicClient, hash);
 };
 
@@ -1590,7 +1597,7 @@ export const wireOracleToFactory = async (params: {
   const factory = await params.viem.getContractAt("PrivacyPortalFactory", params.factoryAddress, {
     client: { public: params.publicClient, wallet: params.walletClient },
   });
-  const hash = (await factory.write.setPriceOracle([params.oracleAddress], { account: deployer })) as `0x${string}`;
+  const hash = (await factory.write.setPriceOracle([params.oracleAddress], { account: deployer, gas: COTI_ADMIN_WRITE_GAS })) as `0x${string}`;
   await waitMined(params.publicClient, hash);
 };
 
@@ -1610,7 +1617,7 @@ export const configureTestnetInboxMinFees = async (params: {
 }) => {
   const { local, remote } = await readFeeConfigForChain(params.chainId);
   const deployer = await resolveDeployerAddress(params.walletClient);
-  const writeOpts = { account: deployer } as const;
+  const writeOpts = { account: deployer, gas: COTI_ADMIN_WRITE_GAS } as const;
   const hash = await params.inbox.write.updateMinFeeConfigs([local, remote], writeOpts);
   await waitMined(params.publicClient, hash);
 };
@@ -1637,7 +1644,7 @@ export const configureInboxGasPriceBounds = async (params: {
   const deployer = await resolveDeployerAddress(params.walletClient);
   const hash = await params.inbox.write.setGasPriceBounds(
     [bounds.minPriorityFeeWei, bounds.minGasPriceWei, bounds.maxGasPriceWei],
-    { account: deployer }
+    { account: deployer, gas: COTI_ADMIN_WRITE_GAS }
   );
   await waitMined(params.publicClient, hash);
   return bounds;
@@ -1702,7 +1709,7 @@ export const deployAndWireTestnetPriceOracle = async (
 ) => {
   const { walletClient, inbox } = params;
   const deployer = await resolveDeployerAddress(walletClient);
-  const writeOpts = { account: deployer } as const;
+  const writeOpts = { account: deployer, gas: COTI_ADMIN_WRITE_GAS } as const;
   const oracle = await deployTestnetPriceOracle(params);
   const h = (await inbox.write.setPriceOracle([oracle.address], writeOpts)) as `0x${string}`;
   await waitMined(params.publicClient, h);
@@ -1717,7 +1724,10 @@ type InboxArtifactJson = {
 
 /** Load the compiled `Inbox` artifact (abi + creation bytecode) from disk. */
 export const readInboxArtifact = async (): Promise<InboxArtifact> => {
-  const artifactPath = path.resolve(process.cwd(), "artifacts/contracts/Inbox.sol/Inbox.json");
+  const artifactPath = path.resolve(
+    process.cwd(),
+    "artifacts/@coti-io/coti-pod-inbox-contracts/contracts/Inbox.sol/Inbox.json"
+  );
   const raw = await fs.readFile(artifactPath, "utf8");
   const json = JSON.parse(raw) as InboxArtifactJson;
   if (!json.bytecode || !json.bytecode.startsWith("0x")) {
@@ -1900,7 +1910,10 @@ export const ensureMinerRegistered = async (params: {
     return false;
   }
   const deployer = await resolveDeployerAddress(params.walletClient);
-  const hash = await params.inbox.write.addMiner([params.miner], { account: deployer });
+  const hash = await params.inbox.write.addMiner([params.miner], {
+    account: deployer,
+    gas: COTI_ADMIN_WRITE_GAS,
+  });
   await waitMined(params.publicClient, hash);
   return true;
 };
