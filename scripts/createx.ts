@@ -5,6 +5,7 @@ import {
   getAddress,
   keccak256,
   toHex,
+  zeroAddress,
   type Abi,
   type Address,
   type Hex,
@@ -71,7 +72,7 @@ export const CREATEX_ABI = [
  * - 21st byte = 0x00 => cross-chain redeploy protection DISABLED, so `block.chainid` is NOT mixed
  *   into the guarded salt and the resulting address is identical on every chain.
  * - Last 11 bytes = deterministic entropy derived from the caller-supplied salt `label`
- *   (SoT: `deployConfig.*.yaml` `inboxSalt.label` / `mpcAbiCodecSalt.label` — never hardcode here).
+ *   (SoT: `deployConfig.*.yaml` `inboxSalt.label` / `mpcAbiCodecSalt.label` / `feeManagerSalt.label` — never hardcode here).
  */
 export const buildInboxSalt = (deployer: Address, label: string): Hex => {
   if (!label.trim()) {
@@ -146,6 +147,10 @@ export type DeployInboxDeterministicParams = {
    * Defaults to zero address when omitted.
    */
   mpcAbiReEncode?: Address;
+  /**
+   * {FeeManager} address for Inbox.init (required on every chain).
+   */
+  feeManager: Address;
 };
 
 export type DeployInboxDeterministicResult = {
@@ -222,7 +227,7 @@ export const deployCreate3Deterministic = async (
 export const deployInboxDeterministic = async (
   params: DeployInboxDeterministicParams
 ): Promise<DeployInboxDeterministicResult> => {
-  const { publicClient, walletClient, deployer, chainId, artifact, saltLabel, mpcAbiReEncode } =
+  const { publicClient, walletClient, deployer, chainId, artifact, saltLabel, mpcAbiReEncode, feeManager } =
     params;
 
   if (!(await isCreateXAvailable(publicClient))) {
@@ -237,17 +242,53 @@ export const deployInboxDeterministic = async (
     );
   }
 
+  if (!feeManager || feeManager === ("0x0000000000000000000000000000000000000000" as Address)) {
+    throw new Error("deployInboxDeterministic: feeManager address is required");
+  }
+
   const salt = buildInboxSalt(deployer, saltLabel);
   const predictedAddress = await precomputeCreate3Address(publicClient, deployer, salt);
 
   if (await isContractDeployed(publicClient, predictedAddress)) {
+    // Fail-closed: CREATE3 cannot re-run init. If a codec was supplied, it must already be wired.
+    const expectedCodec = mpcAbiReEncode ? getAddress(mpcAbiReEncode) : zeroAddress;
+    if (expectedCodec !== zeroAddress) {
+      const onChainCodec = getAddress(
+        (await publicClient.readContract({
+          address: predictedAddress,
+          abi: [
+            {
+              type: "function",
+              name: "mpcAbiReEncode",
+              stateMutability: "view",
+              inputs: [],
+              outputs: [{ name: "", type: "address" }],
+            },
+          ],
+          functionName: "mpcAbiReEncode",
+        })) as Address
+      );
+      if (onChainCodec !== expectedCodec) {
+        throw new Error(
+          `Inbox already deployed at ${predictedAddress} but mpcAbiReEncode is ${onChainCodec} ` +
+            `(expected ${expectedCodec}). CREATE3 skips init on existing code, so the codec cannot be ` +
+            `wired in place. Remount the Inbox (bump deployConfig.inboxSalt.label and clear ` +
+            `salt/address) so a fresh deployCreate3AndInit wires the codec, then redeploy.`
+        );
+      }
+    }
     return { address: predictedAddress, predictedAddress, alreadyDeployed: true };
   }
 
   const initData = encodeFunctionData({
     abi: artifact.abi,
     functionName: "init",
-    args: [deployer, chainId, mpcAbiReEncode ?? ("0x0000000000000000000000000000000000000000" as Address)],
+    args: [
+      deployer,
+      chainId,
+      mpcAbiReEncode ?? zeroAddress,
+      feeManager,
+    ],
   });
 
   // Simulate first (read-only): catches reverts and confirms the returned address matches.
