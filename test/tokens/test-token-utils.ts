@@ -346,9 +346,15 @@ export async function syncPodBalancesRoundTrip(
   label: string,
   mineOptions?: MineRequestOptions
 ): Promise<ReturnType<typeof runCrossChainTwoWayRoundTrip>> {
+  // Prefer exact totalValueWei on live networks: Hardhat's +5% value pad without raising callbackFee
+  // inflates the remote fee slice and trips FeeGasTooHigh under ETH/COTI oracle skew.
+  const feeOpts =
+    process.env.LIVE_POD_INBOX_FEES === "1"
+      ? { value: ctx.base.podTwoWayFees.totalValueWei, gas: 8_000_000n }
+      : podTwoWayWriteOptions(ctx.base.podTwoWayFees);
   const txHash = await ctx.podAsCoti.write.syncBalances(
     [[...accounts], ctx.base.podTwoWayFees.callbackFeeWei],
-    podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+    feeOpts
   );
   await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
   return runCrossChainTwoWayRoundTrip(ctx.base, label, {
