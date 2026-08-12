@@ -936,7 +936,21 @@ export type MineRequestOptions = {
    * `gas required exceeds allowance (264187)` when the implicit cap is too low.
    */
   hardhatGas?: bigint;
+  /**
+   * When true (or env `WAIT_FOR_TESTNET_MINER=1`), do not call `batchProcessRequests`.
+   * Poll until the off-chain testnet miner (CMS/HWS) has ingested + executed the request.
+   */
+  waitForTestnetMiner?: boolean;
 };
+
+const waitForTestnetMinerEnabled = (options?: MineRequestOptions): boolean =>
+  options?.waitForTestnetMiner === true ||
+  ["1", "true", "yes"].includes((process.env.WAIT_FOR_TESTNET_MINER ?? "").trim().toLowerCase());
+
+const TESTNET_MINER_POLL_MS = Number(process.env.WAIT_FOR_TESTNET_MINER_POLL_MS ?? "5000");
+const TESTNET_MINER_TIMEOUT_MS = Number(process.env.WAIT_FOR_TESTNET_MINER_TIMEOUT_MS ?? "900000");
+
+const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Mines a source request on the target inbox and waits for confirmation.
 // Uses `request.requestId` from the source inbox (e.g. Hardhat outbox) so the mined batch matches the
@@ -973,6 +987,56 @@ export const mineRequest = async (
   } else {
     nextRequestId = request.requestId;
     logStep(`${label}: using request.requestId ${nextRequestId} for batchProcessRequests`);
+  }
+
+  if (waitForTestnetMinerEnabled(options)) {
+    const deadline = Date.now() + TESTNET_MINER_TIMEOUT_MS;
+    logStep(
+      `${label}: WAIT_FOR_TESTNET_MINER — polling ${chainLabel} until request ${nextRequestId} is executed ` +
+        `(timeout ${TESTNET_MINER_TIMEOUT_MS}ms, poll ${TESTNET_MINER_POLL_MS}ms)`
+    );
+    while (Date.now() < deadline) {
+      const rawIncoming = await inbox.read.incomingRequests([nextRequestId]);
+      const executed = Boolean(getTupleField(rawIncoming, "executed", 10));
+      const storedId = getTupleField(rawIncoming, "requestId", 0) as `0x${string}` | undefined;
+      if (
+        executed &&
+        storedId &&
+        storedId !== "0x0000000000000000000000000000000000000000000000000000000000000000"
+      ) {
+        logStep(`${label}: ${chainLabel} miner completed request ${nextRequestId}`);
+        if (chain === "sepolia") {
+          const rawErr = await inbox.read.errors([nextRequestId]);
+          const errRequestId = getTupleField(rawErr, "requestId", 0) as `0x${string}` | undefined;
+          const errorCode = getTupleField(rawErr, "errorCode", 1) as bigint | number | undefined;
+          if (
+            errRequestId &&
+            errRequestId !== "0x0000000000000000000000000000000000000000000000000000000000000000" &&
+            errorCode !== undefined &&
+            BigInt(errorCode) === 1n
+          ) {
+            const errorMessage = getTupleField(rawErr, "errorMessage", 2);
+            throw new Error(
+              `${label}: callback subcall failed on ${chainLabel} (requestId=${nextRequestId}) errorCode=${errorCode} ` +
+                `errorMessage=${String(errorMessage)}`
+            );
+          }
+        }
+        return {
+          txHash: "0x0000000000000000000000000000000000000000000000000000000000000000",
+          requestIdUsed: nextRequestId,
+        };
+      }
+      const latest = (await inbox.read.lastIncomingRequestId([sourceChainId])) as `0x${string}`;
+      logStep(
+        `${label}: waiting… executed=${executed} lastIncoming=${latest} (want ${nextRequestId})`
+      );
+      await sleepMs(TESTNET_MINER_POLL_MS);
+    }
+    throw new Error(
+      `${label}: timed out after ${TESTNET_MINER_TIMEOUT_MS}ms waiting for testnet miner on ${chainLabel} ` +
+        `for request ${nextRequestId}`
+    );
   }
 
   logStep(`${label}: calling batchProcessRequests on ${chainLabel}`);
