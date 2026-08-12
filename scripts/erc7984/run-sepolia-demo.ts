@@ -11,7 +11,7 @@
  */
 
 import { network } from "hardhat";
-import { defineChain, parseEther, parseSignature, parseUnits } from "viem";
+import { defineChain, parseAbi, parseEther, parseSignature, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { readDeployConfigSync } from "../deploy-config.js";
 import {
@@ -21,7 +21,6 @@ import {
   requireEnv,
   resolveCotiTestnetPrivateKey,
   runCrossChainTwoWayRoundTrip,
-  podTwoWayWriteOptions,
 } from "../../test/system/mpc-test-utils.js";
 import {
   completePodOpRoundTrip,
@@ -49,15 +48,13 @@ type DeployConfig = {
 
 const SEPOLIA_CHAIN_ID = 11155111;
 const COTI_CHAIN_ID = 7082400;
-const MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI = 300529002n;
+/** Match FeeManager.DEFAULT_GAS_PRICE / live Sepolia inbox minGasPriceWei (2 gwei). */
+const MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI = 2_000_000_000n;
 const MPC_FEE_CALC_CALL_SIZE = 512n;
 const MPC_FEE_CALC_REMOTE_EXEC_GAS = 300000n;
 const MPC_FEE_CALC_CALLBACK_EXEC_GAS = 300000n;
 
 const padPodFeeWei = (x: bigint) => x + x / 20n + 1n;
-
-/** Live inbox quotes can undershoot `_referenceGasPrice` validation — pad total mint/transfer fee. */
-const padLiveInboxTotalFee = (x: bigint) => x * 2n + 1n;
 
 async function estimateLivePodTwoWayFees(
   inbox: {
@@ -65,13 +62,28 @@ async function estimateLivePodTwoWayFees(
       calculateTwoWayFeeRequiredInLocalToken: (
         args: readonly [bigint, bigint, bigint, bigint, bigint]
       ) => Promise<readonly [bigint, bigint]>;
+      minGasPriceWei?: () => Promise<bigint>;
     };
   },
   publicClient: { getGasPrice: () => Promise<bigint> }
 ) {
   const chainGasPrice = await publicClient.getGasPrice();
+  let minGasPriceWei = MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI;
+  try {
+    if (inbox.read.minGasPriceWei) {
+      const onChainMin = await inbox.read.minGasPriceWei();
+      if (onChainMin > 0n) minGasPriceWei = onChainMin;
+    }
+  } catch {
+    /* older inbox ABIs */
+  }
+  // Quotes with gasPrice below inbox `_referenceGasPrice` floor inflate wei and trip FeeGasTooHigh.
   const gasPrice =
-    chainGasPrice > MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI ? chainGasPrice : MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI;
+    chainGasPrice > minGasPriceWei
+      ? chainGasPrice
+      : minGasPriceWei > MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI
+        ? minGasPriceWei
+        : MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI;
   const [targetWei, callerWei] = await inbox.read.calculateTwoWayFeeRequiredInLocalToken([
     MPC_FEE_CALC_CALL_SIZE,
     MPC_FEE_CALC_CALL_SIZE,
@@ -79,16 +91,29 @@ async function estimateLivePodTwoWayFees(
     MPC_FEE_CALC_CALLBACK_EXEC_GAS,
     gasPrice,
   ]);
+  // Pad each leg separately. Padding only `total` while keeping callback fixed dumps the
+  // surplus into the remote slice; ETH/COTI oracle ratio then turns that into FeeGasTooHigh.
   const callbackFeeWei = padPodFeeWei(callerWei);
-  const rawTotal = padPodFeeWei(targetWei + callerWei);
+  const targetFeeWei = padPodFeeWei(targetWei);
   return {
     callbackFeeWei,
-    totalValueWei: padLiveInboxTotalFee(rawTotal),
+    totalValueWei: targetFeeWei + callbackFeeWei,
     gasPrice,
   };
 }
 
+/**
+ * Live Sepolia: do not pad `msg.value` above `totalValueWei` without also raising `callbackFeeWei`.
+ * Extra value with a fixed callback dumps surplus into the remote slice; ETH/COTI oracle ratio
+ * then converts that into FeeGasTooHigh (see FeeManager.validateAndPrepareTwoWayFees).
+ */
+const podTwoWayWriteOptionsLive = (fees: { totalValueWei: bigint }) => ({
+  value: fees.totalValueWei,
+  gas: 8_000_000n,
+});
+
 const log = (step: string, detail?: unknown) => {
+
   const body =
     detail === undefined
       ? ""
@@ -244,11 +269,29 @@ async function main() {
 
   const decimals = Number(await podContract.read.decimals());
   const depositDefault =
-    tokenKey === "p.USDC" || tokenKey === "pUSDC" ? "100" : tokenKey === "p.WETH" || tokenKey === "pWETH" ? "0.05" : "1000";
+    tokenKey === "p.USDC" || tokenKey === "pUSDC"
+      ? "100"
+      : tokenKey === "p.WETH" || tokenKey === "pWETH"
+        ? "0.05"
+        : tokenKey === "p.MTT" || tokenKey === "pMTT"
+          ? "1"
+          : "1000";
   const transferDefault =
-    tokenKey === "p.USDC" || tokenKey === "pUSDC" ? "25" : tokenKey === "p.WETH" || tokenKey === "pWETH" ? "0.02" : "250";
+    tokenKey === "p.USDC" || tokenKey === "pUSDC"
+      ? "25"
+      : tokenKey === "p.WETH" || tokenKey === "pWETH"
+        ? "0.02"
+        : tokenKey === "p.MTT" || tokenKey === "pMTT"
+          ? "0.3"
+          : "250";
   const withdrawDefault =
-    tokenKey === "p.USDC" || tokenKey === "pUSDC" ? "25" : tokenKey === "p.WETH" || tokenKey === "pWETH" ? "0.01" : "250";
+    tokenKey === "p.USDC" || tokenKey === "pUSDC"
+      ? "25"
+      : tokenKey === "p.WETH" || tokenKey === "pWETH"
+        ? "0.01"
+        : tokenKey === "p.MTT" || tokenKey === "pMTT"
+          ? "0.2"
+          : "250";
   const depositAmount = parseTokenAmount(process.env.ERC7984_DEPOSIT_AMOUNT, decimals, depositDefault);
   const transferAmount = parseTokenAmount(process.env.ERC7984_TRANSFER_AMOUNT, decimals, transferDefault);
   const withdrawAmount = parseTokenAmount(process.env.ERC7984_WITHDRAW_AMOUNT, decimals, withdrawDefault);
@@ -364,16 +407,21 @@ async function main() {
     log("fund underlying if needed", { owner, depositAmount: depositAmount.toString() });
     const ownerUnderlying = (await underlyingContract.read.balanceOf([owner])) as bigint;
     if (ownerUnderlying < depositAmount) {
+      // MockERC20Decimals ABI has no owner(); faucet MTT is Ownable — probe via Ownable ABI.
       let underlyingOwner: string | undefined;
       try {
-        underlyingOwner = (await underlyingContract.read.owner()) as string;
+        underlyingOwner = (await sepoliaPublic.readContract({
+          address: underlying,
+          abi: parseAbi(["function owner() view returns (address)"]),
+          functionName: "owner",
+        })) as string;
       } catch {
-        /* open mint */
+        /* open mint / non-ownable mock */
       }
       if (underlyingOwner && underlyingOwner.toLowerCase() !== owner.toLowerCase()) {
         throw new Error(
           `Insufficient ${tokenKey} underlying (${ownerUnderlying} < ${depositAmount}). ` +
-            `Underlying owner is ${underlyingOwner}; use ERC7984_TOKEN=p.WETH or fund underlying first.`
+            `Underlying owner is ${underlyingOwner}; fund the demo wallet or set ERC7984_DEPOSIT_AMOUNT within balance.`
         );
       }
       const mintHash = await underlyingContract.write.mint([owner, depositAmount - ownerUnderlying], {
@@ -423,7 +471,28 @@ async function main() {
     callbackBlockscout: blockscoutSepoliaTxUrl(mintRound.sepoliaRelayTxHash),
   });
 
-  await syncPodBalancesRoundTrip({ base, pod: podContract, podAsCoti, podCotiMother, owner, bob }, [owner], "seedOwner");
+  // Mint callback already applies ciphertext when balanceNonces advances; skip sync if seeded.
+  const ownerBalCt = await podContract.read.balanceOf([owner]);
+  const ownerBalNonce = (await podContract.read.balanceNonces([owner])) as bigint;
+  const ctZero =
+    typeof ownerBalCt === "object" &&
+    ownerBalCt !== null &&
+    "ciphertextHigh" in (ownerBalCt as object)
+      ? (ownerBalCt as { ciphertextHigh: bigint; ciphertextLow: bigint }).ciphertextHigh === 0n &&
+        (ownerBalCt as { ciphertextHigh: bigint; ciphertextLow: bigint }).ciphertextLow === 0n
+      : Array.isArray(ownerBalCt) && ownerBalCt[0] === 0n && ownerBalCt[1] === 0n;
+  if (ownerBalNonce === 0n || ctZero) {
+    log("seed owner pToken balance via syncBalances");
+    await syncPodBalancesRoundTrip(
+      { base, pod: podContract, podAsCoti, podCotiMother, owner, bob },
+      [owner],
+      "seedOwner"
+    );
+  } else {
+    log("owner pToken balance already seeded by mint callback", {
+      balanceNonces: ownerBalNonce.toString(),
+    });
+  }
 
   log("pToken transfer owner → bob", transferAmount.toString());
   let transferSubmitHash: `0x${string}` = "0x";
@@ -433,7 +502,7 @@ async function main() {
     async () => {
       transferSubmitHash = await podAsCoti.write.transfer(
         [bob.address, transferAmount, podTwoWayFees.callbackFeeWei],
-        { ...podTwoWayWriteOptions(podTwoWayFees), account: owner }
+        { ...podTwoWayWriteOptionsLive(podTwoWayFees), account: owner }
       );
       return transferSubmitHash;
     },
