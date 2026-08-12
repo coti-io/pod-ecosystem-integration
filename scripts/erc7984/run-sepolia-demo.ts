@@ -8,6 +8,7 @@
  *   ERC7984_DEPOSIT_AMOUNT=0.05      (token units; decimals allowed for 18-dec tokens, default 0.05)
  *   ERC7984_TRANSFER_AMOUNT=0.02     (token units, default 0.02)
  *   ERC7984_WITHDRAW_AMOUNT=0.01     (token units, default 0.01 for WETH / scaled for others)
+ *   WAIT_FOR_TESTNET_MINER=1         Poll CMS/HWS instead of self-mining batchProcessRequests
  */
 
 import { network } from "hardhat";
@@ -319,17 +320,24 @@ async function main() {
   const mintCallbackFee =
     depositMintCallbackFee > 0n ? depositMintCallbackFee : podTwoWayFees.callbackFeeWei;
 
-  for (const [label, inboxContract, wallet] of [
-    ["sepolia", inboxSepoliaContract, sepoliaWalletOwner],
-    ["coti", inboxCotiContract, cotiWallet],
-  ] as const) {
-    const added = await ensureMinerRegistered({
-      inbox: inboxContract,
-      miner: owner,
-      publicClient: label === "sepolia" ? sepoliaPublic : cotiPublic,
-      walletClient: wallet,
-    });
-    if (added) log(`registered ${label} inbox miner`, owner);
+  const waitForTestnetMiner = ["1", "true", "yes"].includes(
+    (process.env.WAIT_FOR_TESTNET_MINER ?? "").trim().toLowerCase()
+  );
+  if (waitForTestnetMiner) {
+    log("WAIT_FOR_TESTNET_MINER=1 — off-chain CMS/HWS must mine; skipping self miner registration");
+  } else {
+    for (const [label, inboxContract, wallet] of [
+      ["sepolia", inboxSepoliaContract, sepoliaWalletOwner],
+      ["coti", inboxCotiContract, cotiWallet],
+    ] as const) {
+      const added = await ensureMinerRegistered({
+        inbox: inboxContract,
+        miner: owner,
+        publicClient: label === "sepolia" ? sepoliaPublic : cotiPublic,
+        walletClient: wallet,
+      });
+      if (added) log(`registered ${label} inbox miner`, owner);
+    }
   }
 
   const minContractBalance = podTwoWayFees.totalValueWei * 3n;
