@@ -179,10 +179,10 @@ chains:
           maxFee: '100000000000000000'
     privacyPortalTokens:
       p.MTT:
-        underlying: '0x0fd36eae65230037760054d25ec4617156950a53'
-        portal: '0xFFef82eff8643110c7eCf2627EF73d050f395D7C'
-        pToken: '0x68A984197345eea57ED33dB37D6Ec6f0F0922747'
-        motherRegistrationRequestId: '0x000000000000a86900000000006c11a000000000000000000000000000000005'
+        underlying: '0x328e70e1c52662cd5f19f824fcb8b463d77a6686'
+        portal: '0x745169A80Af0DaD92F9898ddCfA0Df56C91eEf88'
+        pToken: '0x841b2209f12cEb3778cFE31cE0a9048A426FAdCC'
+        motherRegistrationRequestId: '0x000000000000a86900000000006c11a000000000000000000000000000000008'
         pName: 'Private MyTestToken'
         pSymbol: 'pMTT'
         decimals: 18
@@ -316,10 +316,10 @@ chains:
           maxFee: '100000000000000000'
     privacyPortalTokens:
       p.MTT:
-        underlying: '0xc75e882a09fb8f0939b0fa2d311fbd28ce6f9676'
-        portal: '0x479b790D8240b239130ff5FB32dCD43697c8731D'
-        pToken: '0x03224b20Ee0AAfD6D886E61eE73719910ffFe4B5'
-        motherRegistrationRequestId: '0x0000000000aa36a700000000006c11a000000000000000000000000000000006'
+        underlying: '0xd3f5c63f4D87D2235b295FbA83351d31d0eD1BeE'
+        portal: '0x181790940173eE3792B5fbC8e5EC4De9899856Dc'
+        pToken: '0x1D49e843E8E2F66beC3733Ae38b9879e6ece268B'
+        motherRegistrationRequestId: '0x0000000000aa36a700000000006c11a000000000000000000000000000000009'
         pName: 'Private MyTestToken'
         pSymbol: 'pMTT'
         decimals: 18
