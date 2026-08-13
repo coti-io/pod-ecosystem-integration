@@ -38,7 +38,7 @@
     "test:pp-remount": "NODE_OPTIONS='--max-old-space-size=8192' COTI_BACKEND=sim PP_REMOUNT_SYSTEM_TESTS=1 hardhat test test/privacy/privacy-portal-remount-system.ts",
     "test:pp-mainnet-smoke": "NODE_OPTIONS='--max-old-space-size=8192' DEPLOY_CONFIG=deployConfig.mainnet.yaml PP_MAINNET_SMOKE=1 hardhat test test/privacy/privacy-portal-mainnet-smoke.ts",
     "test:oracle-sepolia-live": "NODE_OPTIONS='--max-old-space-size=8192' hardhat test test/privacy/oracle-sepolia-live-prices.ts",
-    "test:erc7984": "NODE_OPTIONS='--max-old-space-size=8192' hardhat test test/erc7984/erc7984-compat.ts test/erc7984/portal-wrapper.ts test/erc7984/dummy-sync-flow.ts",
+    "test:erc7984": "NODE_OPTIONS='--max-old-space-size=8192' ERC7984_DUMMY_TESTS=1 hardhat test test/erc7984/erc7984-compat.ts test/erc7984/portal-wrapper.ts test/erc7984/dummy-sync-flow.ts",
     "test:erc7984-explorer": "NODE_OPTIONS='--max-old-space-size=8192' ERC7984_EXPLORER_TESTS=1 hardhat test test/erc7984/blockscout-explorer.ts",
     "demo:erc7984-sepolia": "hardhat run scripts/erc7984/run-sepolia-demo.ts --network sepolia",
     "demo:erc7984-dummy-sepolia": "hardhat run scripts/erc7984/run-dummy-explorer-demo.ts --network sepolia",
