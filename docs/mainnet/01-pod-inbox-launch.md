@@ -138,6 +138,8 @@ Constant-fee legs must also clear the worst-case floor assert (`constantFee ≥ 
 
 **H-02 gas-price skew:** live lanes must set non-identity `feeConfig.remote.gasPriceMul/Div` (`mul/div ≈ g_local/g_remote`). Deploy helpers refuse remote `mul == div` except Hardhat / `allowGasPriceSkewOneToOne`. Measure with `node scripts/measure-gas-price-skew.mjs`; full runbook in inbox `docs/ESTIMATE_EXECUTION_GAS.md`.
 
+**Message life:** Inbox init defaults `maxMessageLife` to **172800** (48h). Optional `chains.<id>.maxMessageLife` in deployConfig is applied by the `feeConfig` target (`0` = uncapped).
+
 `chains.<id>.feeConfig.local` / `.remote` — min-fee templates applied by `feeConfig` target.
 
 `chains.<id>.gasPriceBounds` — **required in deployConfig** (no silent inbox defaults). On COTI (non-EIP-1559) also require a non-zero ceiling:
