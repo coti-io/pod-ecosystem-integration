@@ -13,7 +13,7 @@
  * Do not re-apply FeeConfig.gasPriceMul/Div: prepaid `targetFee` already includes skew.
  */
 
-export const POST_CALL_GAS_RESERVE = 100_000n;
+export const POST_CALL_GAS_RESERVE = 200_000n;
 /** Matches InboxMiner.ESTIMATE_OUTER_RESERVE (estimator stipend cushion only). */
 export const ESTIMATE_OUTER_RESERVE = 150_000n;
 
