@@ -89,7 +89,7 @@ chains:
         bufferRatioX10000: '0'
         maxMethodCallBytes: '8192'
         maxExecutionGas: '25000000'
-        gasPriceMul: '1'
+        gasPriceMul: '5'
         gasPriceDiv: '1'
     portalFee:
       deposit:
@@ -173,7 +173,7 @@ chains:
         bufferRatioX10000: '0'
         maxMethodCallBytes: '8192'
         maxExecutionGas: '25000000'
-        gasPriceMul: '1'
+        gasPriceMul: '13'
         gasPriceDiv: '1'
     portalFee:
       deposit:
@@ -255,7 +255,7 @@ chains:
         maxMethodCallBytes: '8192'
         maxExecutionGas: '5000000'
         gasPriceMul: '1'
-        gasPriceDiv: '1'
+        gasPriceDiv: '10'
     gasPriceBounds:
       minPriorityFeeWei: '0'
       minGasPriceWei: '2000000000'
