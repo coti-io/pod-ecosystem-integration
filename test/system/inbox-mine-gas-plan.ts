@@ -39,7 +39,8 @@ const d = runSuite ? describe : describe.skip;
 const step = (message: string) => logStep(`inbox-mine-gas: ${message}`);
 
 /** Max acceptable over-estimate vs actual receipt gas (basis points). */
-const MAX_HEADROOM_BPS_PROJECTION = 2_500n; // when estimateExecutionGas floor wins (e.g. griefing)
+// Projection includes POST_CALL_GAS_RESERVE (200k); respond/raise paths often leave ~25–30% unused.
+const MAX_HEADROOM_BPS_PROJECTION = 3_500n; // when estimateExecutionGas floor wins (e.g. griefing)
 const MAX_HEADROOM_BPS_ETH_ESTIMATE = 5_000n; // Hardhat eth_estimateGas often pads ~15–50%
 
 const FLAT_FEE: SystemInboxFeeConfig = {
