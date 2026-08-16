@@ -64,6 +64,8 @@ async function estimateLivePodTwoWayFees(
         args: readonly [bigint, bigint, bigint, bigint, bigint]
       ) => Promise<readonly [bigint, bigint]>;
       minGasPriceWei?: () => Promise<bigint>;
+      localMinFeeConfig?: () => Promise<readonly unknown[] | { constantFee?: bigint }>;
+      remoteMinFeeConfig?: () => Promise<readonly unknown[] | { constantFee?: bigint }>;
     };
   },
   publicClient: { getGasPrice: () => Promise<bigint> }
@@ -92,10 +94,25 @@ async function estimateLivePodTwoWayFees(
     MPC_FEE_CALC_CALLBACK_EXEC_GAS,
     gasPrice,
   ]);
-  // Pad each leg separately. Padding only `total` while keeping callback fixed dumps the
-  // surplus into the remote slice; ETH/COTI oracle ratio then turns that into FeeGasTooHigh.
-  const callbackFeeWei = padPodFeeWei(callerWei);
-  const targetFeeWei = padPodFeeWei(targetWei);
+
+  // Constant-fee legs ship constantFee == maxExecutionGas on live lanes — any wei pad over-credits
+  // prepaid gas units and reverts FeeGasTooHigh. Pad only variable-fee legs.
+  const constantFeeOf = async (
+    readFn?: () => Promise<readonly unknown[] | { constantFee?: bigint }>
+  ): Promise<bigint> => {
+    if (!readFn) return 0n;
+    try {
+      const raw = await readFn();
+      if (Array.isArray(raw)) return BigInt(raw[0] as bigint);
+      return BigInt((raw as { constantFee?: bigint }).constantFee ?? 0n);
+    } catch {
+      return 0n;
+    }
+  };
+  const remoteConstant = await constantFeeOf(inbox.read.remoteMinFeeConfig);
+  const localConstant = await constantFeeOf(inbox.read.localMinFeeConfig);
+  const targetFeeWei = remoteConstant > 0n ? targetWei : padPodFeeWei(targetWei);
+  const callbackFeeWei = localConstant > 0n ? callerWei : padPodFeeWei(callerWei);
   return {
     callbackFeeWei,
     totalValueWei: targetFeeWei + callbackFeeWei,
