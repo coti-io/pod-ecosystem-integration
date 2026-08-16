@@ -275,7 +275,8 @@ export const SYSTEM_INBOX_REMOTE_MIN_FEE: SystemInboxFeeConfig = {
   errorLength: 0n,
   bufferRatioX10000: 0n,
   maxMethodCallBytes: 8192n,
-  maxExecutionGas: 18_000_000n,
+  // Above constantFee so modest test value pads still clear FeeGasTooHigh (oracle pegged 1/1).
+  maxExecutionGas: 25_000_000n,
   gasPriceMul: 1n,
   gasPriceDiv: 1n,
 };
@@ -397,14 +398,10 @@ export async function calculateTwoWayFeeRequiredInLocalToken(
 
   let targetGasRemote = expectedMinFeeGasUnits(remoteMethodCallSize, remote);
   let callerGasLocal = expectedMinFeeGasUnits(callBackMethodCallSize, local);
-  // Variable templates: add explicit execution headroom. Constant-fee templates already bake
-  // worst-case execution into constantFee (== maxExecutionGas on live lanes) — do not add again.
-  if (remote.constantFee === 0n) {
-    targetGasRemote += remoteMethodExecutionGas;
-  }
-  if (local.constantFee === 0n) {
-    callerGasLocal += callBackMethodExecutionGas;
-  }
+  // Always add exec-gas headroom — matches InboxFeeQuoter / FeeManagerStubBase
+  // (`_expectedMinFee + remoteMethodExecutionGas`). Constant-fee legs still get this add-on.
+  targetGasRemote += remoteMethodExecutionGas;
+  callerGasLocal += callBackMethodExecutionGas;
   if (remote.maxExecutionGas > 0n && targetGasRemote > remote.maxExecutionGas) {
     targetGasRemote = remote.maxExecutionGas;
   }
@@ -442,8 +439,8 @@ export async function estimateGas(inbox: any): Promise<PodTwoWayFeeEstimate> {
   );
   // Wei pad increases prepaid gas units on-chain. When constantFee already equals maxExecutionGas,
   // any pad trips FeeGasTooHigh — skip pad on those legs.
-  const padTarget = !(remote.constantFee > 0n && remote.constantFee >= remote.maxExecutionGas);
-  const padCaller = !(local.constantFee > 0n && local.constantFee >= local.maxExecutionGas);
+  const padTarget = !(remote.constantFee > 0n);
+  const padCaller = !(local.constantFee > 0n);
   const callbackFeeWei = padCaller ? padPodFeeWei(callerWei) : callerWei;
   const targetPart = padTarget ? padPodFeeWei(targetWei) : targetWei;
   const callerPart = padCaller ? padPodFeeWei(callerWei) : callerWei;
@@ -486,11 +483,24 @@ export async function ensureMpcInboxOracleAndFees(params: {
     logStep(`${label}: PriceOracle already set: ${currentOracle}`);
   }
 
+  // System tests: peg 1/1 so modest value pads (concurrent txs, etc.) stay within maxExecutionGas.
+  // Live-like ETH/COTI ratios turn a 5–10% wei pad into billions of remote gas units (FeeGasTooHigh).
+  await pegInboxOracleUsd1to1({ label, viem, inbox, publicClient, walletClient });
+
+  const cotiSide =
+    chainId === 7082400 ||
+    chainId === 7082401 ||
+    chainId === 2632500;
+  // Source chains: local=variable (5M), remote=COTI constant. COTI: swapped so inbound
+  // targetFee can clear local maxExecutionGas when mining.
   await applySystemInboxMinFeeConfigs({
     label,
     inbox,
     publicClient,
     walletClient,
+    ...(cotiSide
+      ? { local: SYSTEM_INBOX_REMOTE_MIN_FEE, remote: SYSTEM_INBOX_LOCAL_MIN_FEE }
+      : {}),
   });
 
   // So {@link estimateGas} can read oracle USD prices without a separate client arg.
@@ -599,10 +609,11 @@ export const HARDHAT_EDR_TX_GAS_CAP = 16_777_216n;
 
 /** viem `writeContract` options attaching the two-way native payment from {@link estimateGas}. */
 export function podTwoWayWriteOptions(fees: PodTwoWayFeeEstimate): { value: bigint; gas: bigint } {
-  // Small pad absorbs Hardhat base-fee drift between setup-time estimate and later sends.
-  // Explicit gas: Hardhat EDR eth_estimateGas can under-estimate PoD two-way sends after fee bounds.
+  // Exact totalValueWei only: a % pad without raising callbackFeeWei inflates the remote gas
+  // slice and trips FeeGasTooHigh when remote constantFee == maxExecutionGas (live + system templates).
+  // Gas price bounds are pinned in setup, so base-fee drift pad is unnecessary.
   return {
-    value: fees.totalValueWei + fees.totalValueWei / 20n,
+    value: fees.totalValueWei,
     gas: 8_000_000n,
   };
 }

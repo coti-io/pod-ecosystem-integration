@@ -18,7 +18,7 @@ import { oracleTokensForChain } from "../../scripts/oracle-tokens.js";
 import {
   completePodOpRoundTrip,
   getDefaultCotiMineGasPodToken,
-  POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI,
+  quoteOneWayRemoteConstantFeeLocalWei,
   registerPodTokenOnMother,
   setupBobUser,
   syncPodBalancesRoundTrip,
@@ -172,11 +172,15 @@ export async function setupPrivacyPortalSystemContext(params: {
     );
 
     ppLog("createPortal (one-way mother registration)");
+    const motherRegValue = await quoteOneWayRemoteConstantFeeLocalWei({
+      inbox: base.contracts.inboxSepolia,
+      publicClient: base.sepolia.publicClient,
+    });
     const createHash = await factory.write.createPortal(
       [underlying.address, "Private TUSD", "pTUSD", 18, false],
       {
         account: owner,
-        value: POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI,
+        value: motherRegValue,
         gas: 5_000_000n,
       }
     );

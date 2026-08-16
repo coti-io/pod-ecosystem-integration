@@ -256,8 +256,31 @@ export async function setupPodTokenTestContext(params: {
   return { base, pod, podAsCoti, podAsBob, podCotiMother, owner, bob };
 }
 
-/** Native wei for `sendOneWayMessage` registration (matches `PrivacyPortalFactory.createPortal` default). */
+/** @deprecated Prefer {@link quoteOneWayRemoteConstantFeeLocalWei} — hardcoded wei over-credits under ETH/COTI oracle skew. */
 export const POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI = 2_500_000_000_000n;
+
+/**
+ * Local-wei floor for a one-way remote constant-fee leg (mother registration / createPortal).
+ * Matches deploy-cli: exact `calculateTwoWayFeeRequiredInLocalToken` target wei — any pad trips
+ * `FeeGasTooHigh` when `constantFee == maxExecutionGas`.
+ */
+export async function quoteOneWayRemoteConstantFeeLocalWei(params: {
+  inbox: { read: { minGasPriceWei: () => Promise<unknown>; calculateTwoWayFeeRequiredInLocalToken: (args: unknown) => Promise<unknown> } };
+  publicClient: { getBlock: () => Promise<{ baseFeePerGas?: bigint | null }> };
+}): Promise<bigint> {
+  const minGasPrice = BigInt((await params.inbox.read.minGasPriceWei()) as bigint);
+  const block = await params.publicClient.getBlock();
+  const base = block.baseFeePerGas ?? 0n;
+  const gasPrice = base > minGasPrice ? base : minGasPrice;
+  const [targetFeeLocalWei] = (await params.inbox.read.calculateTwoWayFeeRequiredInLocalToken([
+    0n,
+    0n,
+    0n,
+    0n,
+    gasPrice,
+  ])) as readonly [bigint, bigint];
+  return targetFeeLocalWei;
+}
 
 /** Registers a source-chain pToken namespace on the COTI mother via a mined one-way inbox message. */
 export async function registerPodTokenOnMother(params: {
@@ -287,6 +310,11 @@ export async function registerPodTokenOnMother(params: {
     args: [pTokenAddress, name, symbol, decimals],
   });
 
+  const value = await quoteOneWayRemoteConstantFeeLocalWei({
+    inbox: base.contracts.inboxSepolia,
+    publicClient: base.sepolia.publicClient,
+  });
+
   const hash = await base.contracts.inboxSepolia.write.sendOneWayMessage(
     [
       base.chainIds.coti,
@@ -301,7 +329,7 @@ export async function registerPodTokenOnMother(params: {
     ],
     {
       account: registrar,
-      value: POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI,
+      value,
       // eth_estimateGas simulates without msg.value; inbox rejects TotalFeeTooLow(0) during estimation.
       gas: 800_000n,
     }
