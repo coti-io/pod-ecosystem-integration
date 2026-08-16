@@ -80,7 +80,7 @@ chains:
         gasPriceMul: '1'
         gasPriceDiv: '1'
       remote:
-        constantFee: '18553600'
+        constantFee: '25000000'
         gasPerByte: '0'
         callbackExecutionGas: '0'
         errorLength: '0'
@@ -142,7 +142,7 @@ chains:
         gasPriceMul: '1'
         gasPriceDiv: '1'
       remote:
-        constantFee: '18553600'
+        constantFee: '25000000'
         gasPerByte: '0'
         callbackExecutionGas: '0'
         errorLength: '0'
@@ -244,7 +244,7 @@ chains:
     cotiMother: '0x3851a839f6017a7bca1a10ab10151e27f022ceb2'
     feeConfig:
       local:
-        constantFee: '18553600'
+        constantFee: '25000000'
         gasPerByte: '0'
         callbackExecutionGas: '0'
         errorLength: '0'
@@ -361,7 +361,7 @@ chains:
         gasPriceMul: '1'
         gasPriceDiv: '1'
       remote:
-        constantFee: '18553600'
+        constantFee: '25000000'
         gasPerByte: '0'
         callbackExecutionGas: '0'
         errorLength: '0'
