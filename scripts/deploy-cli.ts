@@ -770,8 +770,9 @@ const buildPpTokenTargets = (): Target[] => {
             0n,
             gasPrice,
           ])) as readonly [bigint, bigint];
-          // Tiny pad under maxExecutionGas headroom (avoid FeeGasTooHigh from overpay).
-          const motherRegValue = targetFeeLocalWei + targetFeeLocalWei / 50n;
+          // Exact floor only: live constant-fee templates set constantFee == maxExecutionGas, so any
+          // pad over-credits remote gas and reverts FeeGasTooHigh on create.
+          const motherRegValue = targetFeeLocalWei;
           console.log(`  ${t.key} createPortal mother-reg fee value=${motherRegValue} wei (gasPrice=${gasPrice})`);
           const hash = await factory.write.createPortal(
             [underlying, live.pName, live.pSymbol, live.decimals, wrapNative],
