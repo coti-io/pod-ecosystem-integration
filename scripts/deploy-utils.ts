@@ -231,6 +231,12 @@ type DeployConfig = {
        * Required on non-EIP-1559 chains (e.g. COTI); recommended on all deploys.
        */
       gasPriceBounds?: GasPriceBoundsJson;
+      /**
+       * Optional override for Inbox {setMaxMessageLife} (seconds).
+       * On-chain default after init is 172800 (48h); omit to leave default / no-op when already set.
+       * `0` means uncapped retry.
+       */
+      maxMessageLife?: string | number;
       /** Factory default portal protocol fees (deposit + withdraw). */
       portalFee?: { deposit: PortalFeeConfigJson; withdraw: PortalFeeConfigJson };
       /** @deprecated Use top-level `deployConfig.roles`. Ignored when top-level roles exist. */
@@ -1718,6 +1724,43 @@ export const configureInboxGasPriceBounds = async (params: {
   );
   await waitMined(params.publicClient, hash);
   return bounds;
+};
+
+/** Default on-chain maxMessageLife after Inbox init ({FeeManager.DEFAULT_MAX_MESSAGE_LIFE}). */
+export const DEFAULT_MAX_MESSAGE_LIFE_SECONDS = 172_800n;
+
+/**
+ * Optional `{setMaxMessageLife}` from `deployConfig.chains[id].maxMessageLife`.
+ * No-op when the field is absent (on-chain default is already 48h).
+ */
+export const configureInboxMaxMessageLife = async (params: {
+  inbox: {
+    read: { maxMessageLife: () => Promise<number | bigint> };
+    write: {
+      setMaxMessageLife: (args: [number], options?: { account: `0x${string}` }) => Promise<`0x${string}`>;
+    };
+  };
+  publicClient: unknown;
+  walletClient: WalletClient;
+  chainId: number;
+}): Promise<bigint | null> => {
+  const cfg = await readDeployConfig();
+  const raw = cfg.chains?.[String(params.chainId)]?.maxMessageLife;
+  if (raw === undefined || raw === null || raw === "") {
+    return null;
+  }
+  const desired = BigInt(raw);
+  const current = BigInt(await params.inbox.read.maxMessageLife());
+  if (current === desired) {
+    return desired;
+  }
+  const deployer = await resolveDeployerAddress(params.walletClient);
+  const hash = await params.inbox.write.setMaxMessageLife([Number(desired)], {
+    account: deployer,
+    gas: COTI_ADMIN_WRITE_GAS,
+  });
+  await waitMined(params.publicClient, hash);
+  return desired;
 };
 
 /**

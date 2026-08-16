@@ -13,6 +13,7 @@ import {
   chainlinkFeedsForChain,
   configureTestnetInboxMinFees,
   configureInboxGasPriceBounds,
+  configureInboxMaxMessageLife,
   configurePortalFactoryFees,
   createPublicClientForChain,
   deployDeterministicInbox,
@@ -1125,6 +1126,17 @@ const TARGETS: Target[] = [
       console.log(`  setGasPriceBounds applied: ${formatGasPriceBounds(bounds)}`);
       if (ctx.chainId === 7082400 || ctx.chainId === 2632500) {
         console.log("  (non-EIP-1559 / COTI: gasPriceBounds are required for safe fee→gas conversion)");
+      }
+      const life = await configureInboxMaxMessageLife({
+        inbox,
+        publicClient: ctx.publicClient,
+        walletClient: ctx.walletClient,
+        chainId: ctx.chainId,
+      });
+      if (life !== null) {
+        console.log(`  setMaxMessageLife applied: ${life}s`);
+      } else {
+        console.log("  maxMessageLife: leave on-chain default (48h) — set chains.<id>.maxMessageLife to override");
       }
     },
   },
