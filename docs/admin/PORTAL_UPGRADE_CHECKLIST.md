@@ -23,6 +23,20 @@ Related: [PORTAL_PAUSE_RESCUE_RUNBOOK.md](./PORTAL_PAUSE_RESCUE_RUNBOOK.md) for 
 - [ ] Communicate maintenance window: deposits/withdrawals unavailable on this underlying until new portal is unpaused.
 - [ ] **Cross-factory handoff:** before `transferPTokenOwnership` to another factory, pause and drain the source factory’s portal; the destination attach path does not pause the source portal.
 
+## M-31 — Never remount with in-flight withdraw / rescue
+
+Withdraw callbacks encode the **portal address at request time**. After remount + collateral move, a success callback still targets the **old** portal; release can fail and the user is stuck. This is an **ops-only** control (no protocol remount API change in this wave).
+
+**Hard gate before `createPortalWithExistingPToken` / `retireDepositsForUpgrade` / sized rescue that empties the old vault:**
+
+- [ ] Pause deposits early (`isDepositEnabled = false` and/or full `pause()`).
+- [ ] Inventory all pending withdrawals / TransferPending / `pendingBurnAmount` on the old portal.
+- [ ] Finalize or kill every in-flight withdraw (and any mid-flight rescue) until pending set is empty.
+- [ ] Confirm no open PoD request still expects a withdraw callback to the old portal.
+- [ ] Only then remount with the existing pToken; migrate collateral; open the new portal.
+
+**Never** remount while withdraw or rescue is mid-flight. Prefer delaying remount over stranding users.
+
 ## Fee / limit state (not auto-carried)
 
 Remount deploys a **fresh** portal clone. The following are **not** copied from the old portal:
