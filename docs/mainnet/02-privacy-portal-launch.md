@@ -111,3 +111,14 @@ npm run fork:cli -- setup --source avalanche --coti mainnet
 ```bash
 DEPLOY_CONFIG=deployConfig.mainnet.yaml PP_MAINNET_SMOKE=1 npm run test:pp-mainnet-smoke
 ```
+
+## Portal remount / upgrade (ops)
+
+If you must replace a portal clone while keeping the same pToken, follow **[docs/admin/PORTAL_UPGRADE_CHECKLIST.md](../admin/PORTAL_UPGRADE_CHECKLIST.md)** (M-31):
+
+1. Pause deposits.
+2. Finalize or kill **all** pending withdrawals / in-flight burns (and never remount mid-rescue).
+3. `retireDepositsForUpgrade` / remount via `createPortalWithExistingPToken`.
+4. Migrate collateral, then open the new portal.
+
+Do **not** remount with in-flight withdraw or rescue mid-flight — withdraw callbacks still target the old portal address.
