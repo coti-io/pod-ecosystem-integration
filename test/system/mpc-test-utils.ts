@@ -395,11 +395,32 @@ export async function calculateTwoWayFeeRequiredInLocalToken(
   })) as [bigint, bigint];
   const [localPrice, remotePrice] = prices;
 
-  let targetGasRemote = expectedMinFeeGasUnits(remoteMethodCallSize, remote) + remoteMethodExecutionGas;
-  let callerGasLocal = expectedMinFeeGasUnits(callBackMethodCallSize, local) + callBackMethodExecutionGas;
+  let targetGasRemote = expectedMinFeeGasUnits(remoteMethodCallSize, remote);
+  let callerGasLocal = expectedMinFeeGasUnits(callBackMethodCallSize, local);
+  // Variable templates: add explicit execution headroom. Constant-fee templates already bake
+  // worst-case execution into constantFee (== maxExecutionGas on live lanes) — do not add again.
+  if (remote.constantFee === 0n) {
+    targetGasRemote += remoteMethodExecutionGas;
+  }
+  if (local.constantFee === 0n) {
+    callerGasLocal += callBackMethodExecutionGas;
+  }
+  if (remote.maxExecutionGas > 0n && targetGasRemote > remote.maxExecutionGas) {
+    targetGasRemote = remote.maxExecutionGas;
+  }
+  if (local.maxExecutionGas > 0n && callerGasLocal > local.maxExecutionGas) {
+    callerGasLocal = local.maxExecutionGas;
+  }
   // ceil mulDiv for skew invert: gas * div / mul (matches InboxFeeQuoter Rounding.Ceil)
   targetGasRemote = (targetGasRemote * remote.gasPriceDiv + remote.gasPriceMul - 1n) / remote.gasPriceMul;
   callerGasLocal = (callerGasLocal * local.gasPriceDiv + local.gasPriceMul - 1n) / local.gasPriceMul;
+  // After skew, still must not exceed on-chain maxExecutionGas (prepaid gas units).
+  if (remote.maxExecutionGas > 0n && targetGasRemote > remote.maxExecutionGas) {
+    targetGasRemote = remote.maxExecutionGas;
+  }
+  if (local.maxExecutionGas > 0n && callerGasLocal > local.maxExecutionGas) {
+    callerGasLocal = local.maxExecutionGas;
+  }
   const targetGasLocal = (targetGasRemote * remotePrice + localPrice - 1n) / localPrice;
   return [targetGasLocal * gasPrice, callerGasLocal * gasPrice];
 }
@@ -409,6 +430,8 @@ export async function calculateTwoWayFeeRequiredInLocalToken(
  * On-chain, the inbox stores **gas units** in `Request.targetFee` / `callerFee`; see {@link PodTwoWayFeeEstimate}.
  */
 export async function estimateGas(inbox: any): Promise<PodTwoWayFeeEstimate> {
+  const local = feeConfigFromTuple((await inbox.read.localMinFeeConfig()) as FeeConfigTuple);
+  const remote = feeConfigFromTuple((await inbox.read.remoteMinFeeConfig()) as FeeConfigTuple);
   const [targetWei, callerWei] = await calculateTwoWayFeeRequiredInLocalToken(
     inbox,
     MPC_FEE_CALC_CALL_SIZE,
@@ -417,9 +440,16 @@ export async function estimateGas(inbox: any): Promise<PodTwoWayFeeEstimate> {
     MPC_FEE_CALC_CALLBACK_EXEC_GAS,
     MPC_FEE_CALC_ASSUMED_GAS_PRICE_WEI
   );
+  // Wei pad increases prepaid gas units on-chain. When constantFee already equals maxExecutionGas,
+  // any pad trips FeeGasTooHigh — skip pad on those legs.
+  const padTarget = !(remote.constantFee > 0n && remote.constantFee >= remote.maxExecutionGas);
+  const padCaller = !(local.constantFee > 0n && local.constantFee >= local.maxExecutionGas);
+  const callbackFeeWei = padCaller ? padPodFeeWei(callerWei) : callerWei;
+  const targetPart = padTarget ? padPodFeeWei(targetWei) : targetWei;
+  const callerPart = padCaller ? padPodFeeWei(callerWei) : callerWei;
   return {
-    callbackFeeWei: padPodFeeWei(callerWei),
-    totalValueWei: padPodFeeWei(targetWei + callerWei),
+    callbackFeeWei,
+    totalValueWei: targetPart + callerPart,
   };
 }
 
