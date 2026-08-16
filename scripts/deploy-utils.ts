@@ -777,6 +777,62 @@ export const assertFeeConfigPairErrorLengths = (pair: {
   assertErrorLengthWithinReturnDataCap(pair.remote, "remote FeeConfig");
 };
 
+/** Hardhat / anvil — may keep remote gasPriceMul/Div at 1/1. */
+export const HARDHAT_LOCAL_CHAIN_IDS = new Set<number>([31337]);
+
+/**
+ * Measured remote-leg gasPriceMul/Div for live L1↔COTI lanes (H-02).
+ * Formula: mul/div ≈ g_local / g_remote (see docs/ESTIMATE_EXECUTION_GAS.md).
+ * Local callback leg stays 1/1.
+ */
+export const LIVE_LANE_REMOTE_GAS_PRICE_SKEW: Record<number, { mul: bigint; div: bigint }> = {
+  // Testnet
+  11_155_111: { mul: 5n, div: 1n }, // Sepolia → COTI
+  43_113: { mul: 13n, div: 1n }, // Fuji → COTI (AVAX-like floor skew)
+  7_082_400: { mul: 1n, div: 5n }, // COTI → Sepolia
+  // Mainnet
+  1: { mul: 5n, div: 1n }, // ETH → COTI
+  43_114: { mul: 13n, div: 1n }, // Avalanche → COTI
+  2_632_500: { mul: 1n, div: 10n }, // COTI → L1 (covers ETH~5 and AVAX~13)
+};
+
+/**
+ * Deploy/CI guard (H-02): live lanes must not ship remote mul/div as identity (ratio 1).
+ * Hardhat (31337) or explicit `allowGasPriceSkewOneToOne` may keep 1/1.
+ */
+export const assertRemoteGasPriceSkewConfigured = (
+  pair: { local: FeeConfigTuple; remote: FeeConfigTuple },
+  opts: { chainId: number; allowGasPriceSkewOneToOne?: boolean; label?: string }
+): void => {
+  if (opts.allowGasPriceSkewOneToOne || HARDHAT_LOCAL_CHAIN_IDS.has(opts.chainId)) {
+    return;
+  }
+  const { remote } = pair;
+  if (remote.gasPriceMul === remote.gasPriceDiv) {
+    const label = opts.label ?? `chains[${opts.chainId}] remote FeeConfig`;
+    throw new Error(
+      `${label}: gasPriceMul/Div must not be identity (got ${remote.gasPriceMul}/${remote.gasPriceDiv}). ` +
+        `Set measured g_local/g_remote (H-02; see ESTIMATE_EXECUTION_GAS.md). ` +
+        `Hardhat-only: pass allowGasPriceSkewOneToOne or use chainId 31337.`
+    );
+  }
+};
+
+/** Apply {@link LIVE_LANE_REMOTE_GAS_PRICE_SKEW} onto a builtin pair when present for `chainId`. */
+export const applyLiveLaneRemoteGasPriceSkew = (
+  pair: { local: FeeConfigTuple; remote: FeeConfigTuple },
+  chainId: number
+): { local: FeeConfigTuple; remote: FeeConfigTuple } => {
+  const skew = LIVE_LANE_REMOTE_GAS_PRICE_SKEW[chainId];
+  if (!skew) {
+    return pair;
+  }
+  return {
+    local: { ...pair.local },
+    remote: { ...pair.remote, gasPriceMul: skew.mul, gasPriceDiv: skew.div },
+  };
+};
+
 /** Ship constant-fee at the protocol execution-gas ceiling (≥ worst-case floor). */
 const FEE_CONFIG_COTI_SIDE_CONSTANT = PROTOCOL_MAX_EXECUTION_GAS;
 
@@ -941,18 +997,20 @@ export const feeConfigTupleToJson = (t: FeeConfigTuple): FeeConfigJson => ({
  * Sepolia: local ETH (variable), remote COTI (constant). COTI: local COTI (constant), remote ETH (variable).
  */
 export const testnetMinFeeConfigsForChain = (chainId: number): { local: FeeConfigTuple; remote: FeeConfigTuple } => {
+  let pair: { local: FeeConfigTuple; remote: FeeConfigTuple };
   if (chainId === 11155111 || chainId === 31337 || chainId === AVALANCHE_FUJI_CHAIN_ID) {
-    return { local: { ...FEE_CONFIG_SEPOLIA_SIDE }, remote: { ...FEE_CONFIG_COTI_SIDE } };
+    pair = { local: { ...FEE_CONFIG_SEPOLIA_SIDE }, remote: { ...FEE_CONFIG_COTI_SIDE } };
+  } else if (isCotiFamilyChainId(chainId)) {
+    pair = { local: { ...FEE_CONFIG_COTI_SIDE }, remote: { ...FEE_CONFIG_SEPOLIA_SIDE } };
+  } else {
+    throw new Error(
+      `Unsupported chainId ${chainId} for testnet fee configs. ` +
+        `Use Sepolia (11155111), Avalanche Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
+        `COTI testnet / simCoti, or local (31337), ` +
+        `or set COTI_TESTNET_CHAIN_ID / SIM_COTI_CHAIN_ID to match this network.`
+    );
   }
-  if (isCotiFamilyChainId(chainId)) {
-    return { local: { ...FEE_CONFIG_COTI_SIDE }, remote: { ...FEE_CONFIG_SEPOLIA_SIDE } };
-  }
-  throw new Error(
-    `Unsupported chainId ${chainId} for testnet fee configs. ` +
-      `Use Sepolia (11155111), Avalanche Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
-      `COTI testnet / simCoti, or local (31337), ` +
-      `or set COTI_TESTNET_CHAIN_ID / SIM_COTI_CHAIN_ID to match this network.`
-  );
+  return applyLiveLaneRemoteGasPriceSkew(pair, chainId);
 };
 
 /**
@@ -974,6 +1032,7 @@ export const readFeeConfigForChain = async (
     const pair = testnetMinFeeConfigsForChain(chainId);
     assertFeeConfigPairConstantFeeFloors(pair);
     assertFeeConfigPairErrorLengths(pair);
+    assertRemoteGasPriceSkewConfigured(pair, { chainId });
     return pair;
   }
 
@@ -982,6 +1041,7 @@ export const readFeeConfigForChain = async (
     const pair = testnetMinFeeConfigsForChain(chainId);
     assertFeeConfigPairConstantFeeFloors(pair);
     assertFeeConfigPairErrorLengths(pair);
+    assertRemoteGasPriceSkewConfigured(pair, { chainId });
     return pair;
   }
 
@@ -998,6 +1058,12 @@ export const readFeeConfigForChain = async (
   };
   assertFeeConfigPairConstantFeeFloors(pair);
   assertFeeConfigPairErrorLengths(pair);
+  const allowOneToOne = Boolean(
+    (cfg as { allowGasPriceSkewOneToOne?: boolean }).allowGasPriceSkewOneToOne ||
+      (cfg.chains?.[String(chainId)] as { allowGasPriceSkewOneToOne?: boolean } | undefined)
+        ?.allowGasPriceSkewOneToOne
+  );
+  assertRemoteGasPriceSkewConfigured(pair, { chainId, allowGasPriceSkewOneToOne: allowOneToOne });
   return pair;
 };
 

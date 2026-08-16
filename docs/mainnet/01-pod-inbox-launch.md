@@ -136,6 +136,8 @@ Inbox storage starts with **zero** min-fee templates. Until `updateMinFeeConfigs
 
 Constant-fee legs must also clear the worst-case floor assert (`constantFee ≥ priced execution + max-size ingest`). Variable legs must keep `errorLength ≤ 256` (on-chain returndata cap).
 
+**H-02 gas-price skew:** live lanes must set non-identity `feeConfig.remote.gasPriceMul/Div` (`mul/div ≈ g_local/g_remote`). Deploy helpers refuse remote `mul == div` except Hardhat / `allowGasPriceSkewOneToOne`. Measure with `node scripts/measure-gas-price-skew.mjs`; full runbook in inbox `docs/ESTIMATE_EXECUTION_GAS.md`.
+
 `chains.<id>.feeConfig.local` / `.remote` — min-fee templates applied by `feeConfig` target.
 
 `chains.<id>.gasPriceBounds` — **required in deployConfig** (no silent inbox defaults). On COTI (non-EIP-1559) also require a non-zero ceiling:
