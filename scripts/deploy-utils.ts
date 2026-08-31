@@ -512,19 +512,20 @@ export const oracleUsdPricesForChain = (chainId: number): OracleUsdLegs => {
   const avax = usdPerWholeToken18(TESTNET_AVAX_USD);
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
   const simCotiId = Number(process.env.SIM_COTI_CHAIN_ID || "7082401");
-  if (chainId === 11155111 || chainId === 31337 || chainId >= 313_370_000) {
+  if (chainId === 11155111 || chainId === 31337 || chainId === 1 || chainId >= 313_370_000) {
     return { localUsd18: eth, remoteUsd18: coti };
   }
-  if (chainId === AVALANCHE_FUJI_CHAIN_ID) {
+  if (chainId === AVALANCHE_FUJI_CHAIN_ID || chainId === 43_114) {
     return { localUsd18: avax, remoteUsd18: coti };
   }
   if (isCotiFamilyChainId(chainId)) {
     return { localUsd18: coti, remoteUsd18: eth };
   }
   throw new Error(
-    `Unsupported chainId ${chainId} for testnet oracle legs. ` +
-      `Use Sepolia (11155111), Avalanche Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
-      `COTI testnet (${cotiTestnetId}), simCoti (${simCotiId}), or local (31337), ` +
+    `Unsupported chainId ${chainId} for oracle USD legs. ` +
+      `Use Sepolia (11155111), Ethereum (1), Avalanche Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
+      `Avalanche (43114), COTI testnet (${cotiTestnetId}), simCoti (${simCotiId}), ` +
+      `COTI mainnet (2632500), or local (31337), ` +
       `or set COTI_TESTNET_CHAIN_ID / SIM_COTI_CHAIN_ID to match this network.`
   );
 };
@@ -1228,7 +1229,13 @@ const manualUsdLegsForChain = (chainId: number, oracleConfig?: OracleConfigJson)
   const cotiSpot = oracleConfig?.cotiUsdSpot?.trim();
   if (!cotiSpot) return legs;
   const coti = usdPerWholeToken18(cotiSpot);
-  if (chainId === 11155111 || chainId === 31337 || chainId === AVALANCHE_FUJI_CHAIN_ID) {
+  if (
+    chainId === 11155111 ||
+    chainId === 31337 ||
+    chainId === 1 ||
+    chainId === AVALANCHE_FUJI_CHAIN_ID ||
+    chainId === 43_114
+  ) {
     return { ...legs, remoteUsd18: coti };
   }
   if (isCotiFamilyChainId(chainId)) {
