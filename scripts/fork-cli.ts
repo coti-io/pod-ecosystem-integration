@@ -1,5 +1,5 @@
 /**
- * Fork setup CLI — start Anvil (source) + optional Anvil (COTI) for dry-run deploys.
+ * Fork setup CLI — Anvil (source) + sim-coti tip-fork with MPC @0x64 (COTI).
  *
  * Usage:
  *   npm run fork:cli -- setup --source avalanche --coti mainnet
@@ -7,23 +7,21 @@
  *   npm run fork:cli -- status
  *   npm run fork:cli -- stop
  *
- * After setup, enable forks in deploy config:
- *   forks:
- *     enabled: true
- *     sourceRpc: "http://127.0.0.1:8545"
- *     cotiRpc: "http://127.0.0.1:8546"
- *     label: "FORKED"
+ * Opt out of COTI tip-fork (blank sim only): COTI_EDR_FORK=0
+ * Force Anvil for COTI (no MPC): COTI_USE_ANVIL=1  — not recommended for PoD e2e
  *
- * Then:
- *   DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=forkSource npm run deploy:cli
- *   (or set Hardhat ethereum/avalanche/cotiMainnet URLs via env to the fork ports)
+ * After setup, enable forks in deploy config and point RPCs:
+ *   export AVALANCHE_RPC_URL=http://127.0.0.1:8545
+ *   export COTI_MAINNET_RPC_URL=http://127.0.0.1:8546
+ *   DEPLOY_CONFIG=deployConfig.mainnet.yaml DEPLOY_CLI_NETWORK=cotiMainnet npm run deploy:cli -- --noverify
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
+import { createRequire } from "node:module";
 
 const PID_FILE = path.resolve(process.cwd(), ".fork-cli.pids.json");
+const require = createRequire(import.meta.url);
 
 type ForkPids = {
   source?: { pid: number; port: number; chainId: number; label: string };
@@ -34,7 +32,8 @@ const SOURCE_PRESETS: Record<string, { chainId: number; rpcEnv: string; defaultR
   avalanche: {
     chainId: 43114,
     rpcEnv: "AVALANCHE_RPC_URL",
-    defaultRpc: "https://avalanche-c-chain-rpc.publicnode.com",
+    // Official C-Chain RPC reliably returns CreateX bytecode for Anvil forks.
+    defaultRpc: "https://api.avax.network/ext/bc/C/rpc",
     label: "Avalanche C-Chain",
   },
   ethereum: {
@@ -57,24 +56,43 @@ const SOURCE_PRESETS: Record<string, { chainId: number; rpcEnv: string; defaultR
   },
 };
 
-const COTI_PRESETS: Record<string, { chainId: number; rpcEnv: string; defaultRpc: string; label: string }> = {
+const COTI_PRESETS: Record<
+  string,
+  { chainId: number; rpcEnv: string; defaultRpc: string; archiveRpc: string; label: string; simFlag: string }
+> = {
   mainnet: {
     chainId: 2632500,
     rpcEnv: "COTI_MAINNET_RPC_URL",
     defaultRpc: "https://mainnet.coti.io/rpc",
+    archiveRpc: "https://mainnet-archivenode-01.coti.io/rpc",
     label: "COTI Mainnet",
+    simFlag: "--sim-coti-mainnet",
   },
   testnet: {
     chainId: 7082400,
     rpcEnv: "COTI_TESTNET_RPC_URL",
     defaultRpc: "https://testnet.coti.io/rpc",
+    archiveRpc: "https://testnet.coti.io/rpc",
     label: "COTI Testnet",
+    simFlag: "--sim-coti-testnet",
   },
 };
 
-const whichAnvil = (): string => {
-  // Prefer foundry anvil on PATH
-  return "anvil";
+const whichAnvil = (): string => "anvil";
+
+const resolveSimCotiBin = (): string => {
+  try {
+    const pkgJson = require.resolve("@coti-io/sim-coti-node/package.json");
+    const bin = path.join(path.dirname(pkgJson), "bin", "sim-coti-node.js");
+    if (fs.existsSync(bin)) return bin;
+  } catch {
+    // fall through
+  }
+  const sibling = path.resolve(process.cwd(), "../sim-coti-node/bin/sim-coti-node.js");
+  if (fs.existsSync(sibling)) return sibling;
+  throw new Error(
+    "Cannot find @coti-io/sim-coti-node bin. Install the package or clone sim-coti-node as a sibling."
+  );
 };
 
 const readPids = (): ForkPids => {
@@ -88,6 +106,15 @@ const readPids = (): ForkPids => {
 
 const writePids = (pids: ForkPids) => {
   fs.writeFileSync(PID_FILE, `${JSON.stringify(pids, null, 2)}\n`);
+};
+
+const killPortListeners = async (port: number) => {
+  try {
+    const { execSync } = await import("node:child_process");
+    execSync(`fuser -k ${port}/tcp`, { stdio: "ignore" });
+  } catch {
+    // ignore
+  }
 };
 
 const startAnvil = (params: {
@@ -125,6 +152,67 @@ const startAnvil = (params: {
   return child;
 };
 
+const startSimCoti = (params: {
+  port: number;
+  chainId: number;
+  label: string;
+  simFlag: string;
+  forkUrl: string | null;
+}): ChildProcess => {
+  const bin = resolveSimCotiBin();
+  const args = ["start", params.simFlag, "--port", String(params.port)];
+  if (params.forkUrl) {
+    args.push("--fork-url", params.forkUrl);
+  } else {
+    args.push("--no-fork");
+  }
+  console.log(`[fork-cli] Starting sim-coti for ${params.label} on :${params.port}`);
+  console.log(`[fork-cli]   bin=${bin}`);
+  console.log(`[fork-cli]   profile=${params.simFlag} chain-id=${params.chainId}`);
+  console.log(`[fork-cli]   fork-url=${params.forkUrl ?? "(blank sim, COTI_EDR_FORK=0)"}`);
+  const child = spawn(process.execPath, [bin, ...args], {
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+    env: process.env,
+  });
+  child.stdout?.on("data", (buf) => {
+    const line = String(buf);
+    if (/Precompile injected|simCoti RPC|Listening|Forked from/i.test(line)) {
+      console.log(`[fork-cli] ${params.label}: ${line.trim()}`);
+    }
+  });
+  child.stderr?.on("data", (buf) => {
+    const line = String(buf).trim();
+    if (line) console.warn(`[fork-cli] ${params.label} stderr: ${line}`);
+  });
+  child.unref();
+  return child;
+};
+
+const waitForRpc = async (port: number, label: string, timeoutMs = 180_000) => {
+  const url = `http://127.0.0.1:${port}`;
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+        signal: AbortSignal.timeout(3_000),
+      });
+      const body = (await res.json()) as { result?: string };
+      if (body.result) {
+        console.log(`[fork-cli] ${label} ready on :${port} chainId=${body.result}`);
+        return;
+      }
+    } catch {
+      // retry
+    }
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  throw new Error(`[fork-cli] timed out waiting for ${label} on :${port}`);
+};
+
 const printOverlay = (sourcePort: number, cotiPort: number, sourceChainId: number, cotiChainId: number) => {
   console.log("");
   console.log("────────────────────────────────────────────────────────────");
@@ -139,11 +227,33 @@ const printOverlay = (sourcePort: number, cotiPort: number, sourceChainId: numbe
   console.log("Env helpers:");
   console.log(`  export SOURCE_FORK_RPC_URL=http://127.0.0.1:${sourcePort}`);
   console.log(`  export COTI_FORK_RPC_URL=http://127.0.0.1:${cotiPort}`);
+  console.log(`  export AVALANCHE_RPC_URL=http://127.0.0.1:${sourcePort}   # or ETHEREUM_RPC_URL`);
+  console.log(`  export COTI_MAINNET_RPC_URL=http://127.0.0.1:${cotiPort}`);
   console.log(`  export SOURCE_FORK_CHAIN_ID=${sourceChainId}`);
   console.log(`  export COTI_FORK_CHAIN_ID=${cotiChainId}`);
   console.log(`  export DEPLOY_CONFIG=deployConfig.mainnet.yaml`);
-  console.log(`  # Then: DEPLOY_CLI_NETWORK=forkSource npm run deploy:cli`);
+  console.log(`  # Then: DEPLOY_CLI_NETWORK=cotiMainnet|avalanche npm run deploy:cli -- --noverify`);
   console.log("────────────────────────────────────────────────────────────");
+};
+
+const cmdStop = () => {
+  const pids = readPids();
+  for (const side of ["source", "coti"] as const) {
+    const entry = pids[side];
+    if (!entry?.pid) continue;
+    try {
+      process.kill(-entry.pid, "SIGTERM");
+    } catch {
+      try {
+        process.kill(entry.pid, "SIGTERM");
+      } catch (e) {
+        console.warn(`[fork-cli] could not stop ${entry.label} pid=${entry.pid}: ${e}`);
+      }
+    }
+    console.log(`[fork-cli] stopped ${entry.label} pid=${entry.pid}`);
+  }
+  if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
+  console.log("[fork-cli] done");
 };
 
 const cmdSetup = async (argv: string[]) => {
@@ -171,11 +281,27 @@ const cmdSetup = async (argv: string[]) => {
 
   const existing = readPids();
   if (existing.source?.pid || existing.coti?.pid) {
-    console.warn("[fork-cli] Existing fork pids found — run `npm run fork:cli -- stop` first, or they will be overwritten.");
+    console.warn("[fork-cli] Existing fork pids found — stopping them first.");
+    cmdStop();
   }
+  await killPortListeners(sourcePort);
+  await killPortListeners(cotiPort);
+  await new Promise((r) => setTimeout(r, 1_000));
 
-  const sourceRpc = process.env[source.rpcEnv]?.trim() || source.defaultRpc;
-  const cotiRpc = process.env[coti.rpcEnv]?.trim() || coti.defaultRpc;
+  // Prefer upstream live URLs for Anvil fork-url; do not use already-overridden local ports.
+  const sourceRpc =
+    process.env.SOURCE_FORK_UPSTREAM?.trim() ||
+    process.env[`UPSTREAM_${source.rpcEnv}`]?.trim() ||
+    (process.env[source.rpcEnv]?.includes("127.0.0.1") ? source.defaultRpc : process.env[source.rpcEnv]?.trim()) ||
+    source.defaultRpc;
+
+  const blankCoti = process.env.COTI_EDR_FORK === "0" || process.argv.includes("--blank-coti");
+  const useAnvilCoti = process.env.COTI_USE_ANVIL === "1";
+  const cotiUpstream =
+    process.env.COTI_ARCHIVE_RPC_URL?.trim() ||
+    process.env.COTI_FORK_URL?.trim() ||
+    process.env.COTI_EDR_FORK_URL?.trim() ||
+    coti.archiveRpc;
 
   const sourceProc = startAnvil({
     port: sourcePort,
@@ -183,15 +309,28 @@ const cmdSetup = async (argv: string[]) => {
     chainId: source.chainId,
     label: source.label,
   });
-  const cotiProc = startAnvil({
-    port: cotiPort,
-    forkUrl: cotiRpc,
-    chainId: coti.chainId,
-    label: coti.label,
-  });
 
-  // Brief wait for listen
-  await new Promise((r) => setTimeout(r, 2500));
+  let cotiProc: ChildProcess;
+  if (useAnvilCoti) {
+    console.warn("[fork-cli] COTI_USE_ANVIL=1 — Anvil COTI has no MPC @0x64; PoD e2e will fail.");
+    cotiProc = startAnvil({
+      port: cotiPort,
+      forkUrl: process.env[coti.rpcEnv]?.trim() || coti.defaultRpc,
+      chainId: coti.chainId,
+      label: coti.label,
+    });
+  } else {
+    cotiProc = startSimCoti({
+      port: cotiPort,
+      chainId: coti.chainId,
+      label: `${coti.label} (sim-coti)`,
+      simFlag: coti.simFlag,
+      forkUrl: blankCoti ? null : cotiUpstream,
+    });
+  }
+
+  await waitForRpc(sourcePort, source.label);
+  await waitForRpc(cotiPort, coti.label);
 
   writePids({
     source: {
@@ -204,7 +343,7 @@ const cmdSetup = async (argv: string[]) => {
       pid: cotiProc.pid!,
       port: cotiPort,
       chainId: coti.chainId,
-      label: coti.label,
+      label: useAnvilCoti ? coti.label : `${coti.label} (sim-coti)`,
     },
   });
 
@@ -213,32 +352,14 @@ const cmdSetup = async (argv: string[]) => {
   printOverlay(sourcePort, cotiPort, source.chainId, coti.chainId);
 };
 
-const cmdStop = () => {
+const cmdStatus = async () => {
   const pids = readPids();
   for (const side of ["source", "coti"] as const) {
     const entry = pids[side];
-    if (!entry?.pid) continue;
-    try {
-      process.kill(entry.pid, "SIGTERM");
-      console.log(`[fork-cli] stopped ${entry.label} pid=${entry.pid}`);
-    } catch (e) {
-      console.warn(`[fork-cli] could not stop pid ${entry.pid}:`, e instanceof Error ? e.message : e);
+    if (!entry) {
+      console.log(`[fork-cli] ${side}: not recorded`);
+      continue;
     }
-  }
-  if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
-  console.log("[fork-cli] done");
-};
-
-const cmdStatus = () => {
-  const pids = readPids();
-  if (!pids.source && !pids.coti) {
-    console.log("[fork-cli] no forks running (no pid file)");
-    return;
-  }
-  console.log("[fork-cli] *** FORKED ***");
-  for (const side of ["source", "coti"] as const) {
-    const entry = pids[side];
-    if (!entry) continue;
     let alive = false;
     try {
       process.kill(entry.pid, 0);
@@ -246,46 +367,41 @@ const cmdStatus = () => {
     } catch {
       alive = false;
     }
+    let rpcOk = false;
+    let chainIdHex = "";
+    try {
+      const res = await fetch(`http://127.0.0.1:${entry.port}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+        signal: AbortSignal.timeout(3_000),
+      });
+      const body = (await res.json()) as { result?: string };
+      rpcOk = Boolean(body.result);
+      chainIdHex = body.result ?? "";
+    } catch {
+      rpcOk = false;
+    }
     console.log(
-      `  ${side}: ${entry.label} chainId=${entry.chainId} :${entry.port} pid=${entry.pid} ${alive ? "RUNNING" : "DEAD"}`
+      `[fork-cli] ${side}: ${entry.label} pid=${entry.pid} port=${entry.port} ` +
+        `process=${alive ? "ALIVE" : "DEAD"} rpc=${rpcOk ? "RUNNING" : "DOWN"} chainId=${chainIdHex || "?"}`
     );
   }
 };
 
-const interactive = async () => {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (q: string) => new Promise<string>((res) => rl.question(q, res));
-  console.log("Fork CLI — setup local Anvil forks for dry-run deploy");
-  console.log("  1) setup avalanche + COTI mainnet");
-  console.log("  2) setup ethereum + COTI mainnet");
-  console.log("  3) status");
-  console.log("  4) stop");
-  const choice = (await ask("Choice [1-4]: ")).trim();
-  rl.close();
-  if (choice === "1") await cmdSetup(["--source", "avalanche", "--coti", "mainnet"]);
-  else if (choice === "2") await cmdSetup(["--source", "ethereum", "--coti", "mainnet"]);
-  else if (choice === "3") cmdStatus();
-  else if (choice === "4") cmdStop();
-  else console.log("Cancelled.");
-};
-
 const main = async () => {
-  const argv = process.argv.slice(2);
-  const cmd = argv[0];
-  if (!cmd) {
-    await interactive();
-    return;
-  }
-  if (cmd === "setup") await cmdSetup(argv.slice(1));
+  const [, , cmd, ...rest] = process.argv;
+  if (cmd === "setup") await cmdSetup(rest);
   else if (cmd === "stop") cmdStop();
-  else if (cmd === "status") cmdStatus();
+  else if (cmd === "status") await cmdStatus();
   else {
-    console.error(`Unknown command ${cmd}. Use: setup | stop | status`);
-    process.exit(1);
+    console.log("Usage: npm run fork:cli -- setup|status|stop [--source avalanche|ethereum] [--coti mainnet|testnet]");
+    process.exit(cmd ? 1 : 0);
   }
 };
 
-main().catch((e) => {
-  console.error("[fork-cli] failed:", e);
+// Allow cmdStop to be called from setup without circular issues
+void main().catch((err) => {
+  console.error(err);
   process.exit(1);
 });
