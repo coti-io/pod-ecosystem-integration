@@ -8,9 +8,9 @@ Step-by-step for deploying the PoD messaging stack on **COTI mainnet** (`2632500
    - COTI mainnet CreateX was launched with the pcaversaccio pre-signed tx:
      - tx: `0xb6274b80bc7cda162df89894c7748a5cb7ba2eaa6004183c41a1837c3b072f1e`
      - explorer: https://mainnet.cotiscan.io/address/0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed
-2. Fund the **PoD deployer** (`deployConfig.roles.owner` / `inboxSalt.deployer`, typically `0xdf9f8f…`) with native gas on each chain.
+2. Generate a **fresh deployer EOA** (`cast wallet new`); fund it with native gas on each chain. Set `deployConfig.mainnet.yaml` `roles.*` and salt `deployer` fields to that address; put the SK in `.env` as `PRIVATE_KEY`.
 3. Config: `DEPLOY_CONFIG=deployConfig.mainnet.yaml`
-4. Keys in `.env`: `ETHEREUM_PRIVATE_KEY` / `AVALANCHE_PRIVATE_KEY` / `COTI_MAINNET_PRIVATE_KEY` (or `PRIVATE_KEY`), plus RPC URLs.
+4. Keys in `.env`: `PRIVATE_KEY` (deployer), plus RPC URLs. Per-chain keys (`ETHEREUM_PRIVATE_KEY`, etc.) only if you split signers.
 
 Dry-run first (optional):
 
