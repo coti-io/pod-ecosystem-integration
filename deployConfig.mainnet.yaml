@@ -1,11 +1,5 @@
 # PoD deploy config — MAINNET (Ethereum, Avalanche C-Chain, COTI mainnet).
 # Select with: DEPLOY_CONFIG=deployConfig.mainnet.yaml
-#
-# Wallets: generate a fresh deployer EOA before first deploy (see PIT MAINNET.md §0a).
-# Set roles.* and inboxSalt/feeManagerSalt/mpcAbiCodecSalt deployer fields to that
-# address. Empty roles fall back to PRIVATE_KEY in .env at CLI runtime, but CREATE3
-# salts should list the same address explicitly.
-#
 # CreateX on COTI mainnet: 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed
 # CreateX deploy tx: 0xb6274b80bc7cda162df89894c7748a5cb7ba2eaa6004183c41a1837c3b072f1e
 # No Sablier/payroll addresses.
@@ -16,7 +10,7 @@ forks:
   label: LIVE
 inboxSalt:
   label: pod.inbox.v2.3
-  deployer: ''
+  deployer: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   salt: ''
   guardedSalt: ''
   address: ''
@@ -27,21 +21,25 @@ inboxSalt:
     (and COTI MpcAbiReEncode) as DELEGATECALL helpers; apps still bind only the Inbox address.'
 mpcAbiCodecSalt:
   label: 'pod.mpc-abi-reencode.v1.0'
-  deployer: ''
+  deployer: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   bytecodeNote: 'COTI only. CREATE3 MpcAbiReEncode (Inbox DELEGATECALL target). Bump label independently of inboxSalt.'
 feeManagerSalt:
   label: 'pod.fee-manager.v1.0'
-  deployer: ''
+  deployer: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   bytecodeNote: 'CREATE3 FeeManager (Inbox DELEGATECALL target) on every chain. Bump label independently of inboxSalt.'
 
 roles:
-  owner: ''
-  miners: []
-  priceAdmin: ''
-  operators: []
-  deployers: []
-  feeRecipient: ''
-  rescueRecipient: ''
+  owner: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  miners:
+  - '0x075445b969E2a39E096Dd1FBE9A323ae3353fB76'
+  - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  priceAdmin: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  operators:
+  - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  deployers:
+  - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  feeRecipient: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  rescueRecipient: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
 chains:
   '1':
     inbox: ''
