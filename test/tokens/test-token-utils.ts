@@ -3,10 +3,16 @@ import { network } from "hardhat";
 import { JsonRpcProvider } from "ethers";
 import { privateKeyToAccount } from "viem/accounts";
 import { decryptUint, prepareIT256 } from "@coti-io/coti-sdk-typescript";
+import {
+  prepareSimIT256,
+  signItUserBinding,
+  userBindingDigest256,
+} from "../../../sim-coti-node/sdk/index.js";
 import { ONBOARD_CONTRACT_ADDRESS, transferNative, Wallet as CotiWallet } from "@coti-io/coti-ethers";
 import { createWalletClient, custom, encodeFunctionData, decodeAbiParameters, parseAbi, parseEther, toFunctionSelector, toHex } from "viem";
 import {
   buildEncryptedInput256,
+  INBOX_BATCH_PROCESS_REQUESTS_SIGNATURE,
   decodeCtUint256,
   decryptUint256,
   fundContractForInboxFees,
@@ -25,7 +31,7 @@ import {
   type MineRequestOptions,
   type TestContext,
 } from "../system/mpc-test-utils.js";
-import { isSimCotiBackend } from "../sim-coti/sim-coti-utils.js";
+import { isSimCotiBackend, createSimWallet } from "../sim-coti/sim-coti-utils.js";
 
 /**
  * Gas for COTI `batchProcessRequests` in pod-token tests (`syncBalances` runs `offBoardToUser` per account in one tx).
@@ -486,18 +492,31 @@ export async function readAllowanceWithPending(
 }
 
 /** `buildEncryptedInput256` against the shared test encrypt context. */
-export function encryptAmount(ctx: PodTokenTestContext, amount: bigint) {
-  return buildEncryptedInput256(ctx.base, amount);
+export function encryptAmount(
+  ctx: PodTokenTestContext,
+  amount: bigint,
+  user: `0x${string}` = ctx.base.boundUser
+) {
+  return buildEncryptedInput256(ctx.base, amount, user);
 }
 
 /**
  * Encrypt+sign an amount with Bob's AES key / ECDSA key (for wrong-signer system-error tests).
  * Uses the same inbox `batchProcessRequests` selector as {@link buildEncryptedInput256}.
  */
-export function encryptAmountAsBob(ctx: PodTokenTestContext, amount: bigint) {
-  const functionSelector = toFunctionSelector(
-    "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[])"
-  );
+export async function encryptAmountAsBob(ctx: PodTokenTestContext, amount: bigint) {
+  const functionSelector = toFunctionSelector(INBOX_BATCH_PROCESS_REQUESTS_SIGNATURE);
+  const user = ctx.bob.address;
+  if (isSimCotiBackend()) {
+    const wallet = createSimWallet(ctx.bob.privateKey, ctx.bob.userKey);
+    return prepareSimIT256(
+      amount,
+      { wallet, userKey: ctx.bob.userKey },
+      ctx.base.contracts.inboxCoti.address,
+      functionSelector,
+      user
+    );
+  }
   const it = prepareIT256(
     amount,
     {
@@ -511,10 +530,11 @@ export function encryptAmountAsBob(ctx: PodTokenTestContext, amount: bigint) {
     typeof it.signature === "string"
       ? (it.signature as `0x${string}`)
       : toHex(it.signature as any);
-  return {
-    ciphertext: it.ciphertext,
-    signature,
-  };
+  const userSignature = await signItUserBinding(
+    ctx.bob.privateKey,
+    userBindingDigest256(it.ciphertext.ciphertextHigh, it.ciphertext.ciphertextLow, user)
+  );
+  return { ciphertext: it.ciphertext, signature, user, userSignature };
 }
 
 /** UTF-8 string from app-raise `failedRequests` bytes (raw reason) or system {ErrorData}.message. */
