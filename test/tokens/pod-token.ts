@@ -101,7 +101,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     pt(`case simple transfer: encrypt ${sendAmt} and run transfer round-trip`);
     const itAmount = await encryptAmount(ctx, sendAmt);
     await completePodOpRoundTrip(ctx, "xferSimple", () =>
-      ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount, ctx.base.podTwoWayFees.callbackFeeWei], podTwoWayWriteOptions(ctx.base.podTwoWayFees))
+      ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount, itAmount.userSignature, ctx.base.podTwoWayFees.callbackFeeWei], podTwoWayWriteOptions(ctx.base.podTwoWayFees))
     );
 
     pt("case simple transfer: assert owner and bob balances");
@@ -126,7 +126,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     assert.equal(ap.pending, false);
     pt(`case approve+transferFrom: approve self allowance=${allowanceAmt}`);
     await completePodOpRoundTrip(ctx, "apprSelf", () =>
-      ctx.podAsCoti.write.approve([ctx.owner, itAllow, ctx.base.podTwoWayFees.callbackFeeWei], podTwoWayWriteOptions(ctx.base.podTwoWayFees))
+      ctx.podAsCoti.write.approve([ctx.owner, itAllow, itAllow.userSignature, ctx.base.podTwoWayFees.callbackFeeWei], podTwoWayWriteOptions(ctx.base.podTwoWayFees))
     );
 
     ap = await readAllowanceWithPending(ctx, ctx.owner, ctx.owner);
@@ -140,7 +140,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     const itSpend = await encryptAmount(ctx, spendAmt);
     await completePodOpRoundTrip(ctx, "xferFrom", () =>
       ctx.podAsCoti.write.transferFrom(
-        [ctx.owner, ctx.bob.address, itSpend, ctx.base.podTwoWayFees.callbackFeeWei],
+        [ctx.owner, ctx.bob.address, itSpend, itSpend.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
         podTwoWayWriteOptions(ctx.base.podTwoWayFees)
       )
     );
@@ -153,6 +153,59 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     assert.equal(after.ownerCt, allowanceAmt);
     assert.equal(after.spenderCt, allowanceAmt);
     pt("case approve+transferFrom: done (PoD allowance mirror unchanged as expected)");
+  });
+
+  it("replayed itUint256 fails encode when boundUser is not the original requester", async function () {
+    pt("case it* replay: start");
+    const secret = 7777n;
+    const stolenIt = await encryptAmount(ctx, secret);
+
+    pt("case it* replay: owner uses the input text once (not consumed)");
+    await completePodOpRoundTrip(ctx, "itReplayOwner", () =>
+      ctx.podAsCoti.write.approve(
+        [ctx.owner, stolenIt, stolenIt.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
+        podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+      )
+    );
+    const ownerDec = await readDecryptedAllowance(ctx, ctx.owner, ctx.owner);
+    assert.equal(ownerDec.ownerCt, secret);
+    assert.equal(ownerDec.spenderCt, secret);
+
+    const bobFeeOpts = {
+      ...podTwoWayWriteOptions(ctx.base.podTwoWayFees),
+      value: ctx.base.podTwoWayFees.totalValueWei + ctx.base.podTwoWayFees.totalValueWei / 10n,
+    };
+    pt("case it* replay: Bob approve(self, identical input text) must encode-fail");
+    const { cotiIncomingRequestId } = await completePodOpRoundTrip(ctx, "itReplayBob", () =>
+      ctx.podAsBob.write.approve(
+        [ctx.bob.address, stolenIt, stolenIt.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
+        bobFeeOpts
+      )
+    );
+    const status = await ctx.pod.read.requests([cotiIncomingRequestId]);
+    assert.equal(Number(status.status), 4); // RequestStatus.SystemFailed
+    const errHex = (await ctx.pod.read.failedRequests([cotiIncomingRequestId])) as `0x${string}`;
+    const [code] = decodeAbiParameters([{ type: "uint64" }, { type: "bytes" }], errHex);
+    assert.equal(code, 2n); // ERROR_CODE_ENCODE_FAILED
+    pt("case it* replay: Bob replay SystemFailed / encode failed");
+
+    pt("case it* replay: empty userSignature still encode-fails");
+    const mutated = { ...stolenIt, userSignature: "0x" as `0x${string}` };
+    const { cotiIncomingRequestId: mutatedId } = await completePodOpRoundTrip(
+      ctx,
+      "itReplayMutateUser",
+      () =>
+        ctx.podAsBob.write.approve(
+          [ctx.bob.address, mutated, mutated.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
+          bobFeeOpts
+        )
+    );
+    const mutatedStatus = await ctx.pod.read.requests([mutatedId]);
+    assert.equal(Number(mutatedStatus.status), 4);
+    const mutatedErr = (await ctx.pod.read.failedRequests([mutatedId])) as `0x${string}`;
+    const [mutatedCode] = decodeAbiParameters([{ type: "uint64" }, { type: "bytes" }], mutatedErr);
+    assert.equal(mutatedCode, 2n);
+    pt("case it* replay: empty-sig encode failed");
   });
 
   // Concurrent in-flight transfers need ordered mining + careful fee escrow; currently flakes on the
@@ -171,7 +224,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     pt("case receiver not locked: owner -> bob (PoD only, not mined yet)");
     const itOwnerSend = await encryptAmount(ctx, ownerToBob);
     const ownerTx = await ctx.podAsCoti.write.transfer(
-      [ctx.bob.address, itOwnerSend, ctx.base.podTwoWayFees.callbackFeeWei],
+      [ctx.bob.address, itOwnerSend, itOwnerSend.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
       podTwoWayWriteOptions(ctx.base.podTwoWayFees)
     );
     await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: ownerTx });
@@ -190,7 +243,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     };
     const itBobSend = await encryptAmountAsBob(ctx, bobToOwner);
     const bobTx = await ctx.podAsBob.write.transfer(
-      [ctx.owner, itBobSend, ctx.base.podTwoWayFees.callbackFeeWei],
+      [ctx.owner, itBobSend, itBobSend.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
       bobFeeOpts
     );
     await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: bobTx });
@@ -220,7 +273,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     pt("case concurrent pending: submit first transfer (PoD only, not mined yet on COTI)");
     const itSmall = await encryptAmount(ctx, firstAmt);
     const firstTx = await ctx.podAsCoti.write.transfer(
-      [ctx.bob.address, itSmall, ctx.base.podTwoWayFees.callbackFeeWei],
+      [ctx.bob.address, itSmall, itSmall.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
       podTwoWayWriteOptions(ctx.base.podTwoWayFees)
     );
     await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: firstTx });
@@ -239,7 +292,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     };
     const itAnother = await encryptAmount(ctx, secondAmt);
     const secondTx = await ctx.podAsCoti.write.transfer(
-      [ctx.bob.address, itAnother, ctx.base.podTwoWayFees.callbackFeeWei],
+      [ctx.bob.address, itAnother, itAnother.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
       secondFeeOpts
     );
     await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: secondTx });
@@ -276,7 +329,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     const itAmount = await encryptAmount(ctx, tooMuch);
     pt("case encrypted insufficient: round-trip (expect Success no-op, no raise)");
     const { cotiIncomingRequestId } = await completePodOpRoundTrip(ctx, "encInsufXfer", () =>
-      ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount, ctx.base.podTwoWayFees.callbackFeeWei], podTwoWayWriteOptions(ctx.base.podTwoWayFees))
+      ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount, itAmount.userSignature, ctx.base.podTwoWayFees.callbackFeeWei], podTwoWayWriteOptions(ctx.base.podTwoWayFees))
     );
 
     const st = await readBalanceWithPending(ctx, ctx.owner);
@@ -328,7 +381,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     pt("case bad-enc transfer: round-trip with mismatched it* signer (system error)");
     const { cotiIncomingRequestId } = await completePodOpRoundTrip(ctx, "badEncXfer", () =>
       ctx.podAsCoti.write.transfer(
-        [ctx.bob.address, itBad, ctx.base.podTwoWayFees.callbackFeeWei],
+        [ctx.bob.address, itBad, itBad.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
         podTwoWayWriteOptions(ctx.base.podTwoWayFees)
       )
     );
@@ -349,7 +402,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     const itGood = await encryptAmount(ctx, sendAmt);
     await completePodOpRoundTrip(ctx, "badEncXferRetry", () =>
       ctx.podAsCoti.write.transfer(
-        [ctx.bob.address, itGood, ctx.base.podTwoWayFees.callbackFeeWei],
+        [ctx.bob.address, itGood, itGood.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
         podTwoWayWriteOptions(ctx.base.podTwoWayFees)
       )
     );
@@ -374,7 +427,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     pt("case bad-enc approve: round-trip with mismatched it* signer (system error)");
     const { cotiIncomingRequestId } = await completePodOpRoundTrip(ctx, "badEncAppr", () =>
       ctx.podAsCoti.write.approve(
-        [ctx.bob.address, itBad, ctx.base.podTwoWayFees.callbackFeeWei],
+        [ctx.bob.address, itBad, itBad.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
         podTwoWayWriteOptions(ctx.base.podTwoWayFees)
       )
     );
@@ -394,7 +447,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     const itGood = await encryptAmount(ctx, allowanceAmt);
     await completePodOpRoundTrip(ctx, "badEncApprRetry", () =>
       ctx.podAsCoti.write.approve(
-        [ctx.bob.address, itGood, ctx.base.podTwoWayFees.callbackFeeWei],
+        [ctx.bob.address, itGood, itGood.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
         podTwoWayWriteOptions(ctx.base.podTwoWayFees)
       )
     );
@@ -484,7 +537,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
 
     const itAmount = await encryptAmount(ctx, sendAmt);
     await completePodOpRoundTrip(ctx, "autoXfer", () =>
-      ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount], {
+      ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount, itAmount.userSignature], {
         value: totalValue,
         gasPrice: FEE_CALC_GAS_PRICE_WEI,
         gas: 8_000_000n,
@@ -501,7 +554,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     const itAmount = await encryptAmount(ctx, 1n);
     await assert.rejects(
       () =>
-        ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount], {
+        ctx.podAsCoti.write.transfer([ctx.bob.address, itAmount, itAmount.userSignature], {
           value: 1n,
           gasPrice: FEE_CALC_GAS_PRICE_WEI,
         }),
@@ -521,7 +574,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
 
     const itAllow = await encryptAmount(ctx, allowanceAmt);
     await completePodOpRoundTrip(ctx, "autoAppr", () =>
-      ctx.podAsCoti.write.approve([ctx.bob.address, itAllow], {
+      ctx.podAsCoti.write.approve([ctx.bob.address, itAllow, itAllow.userSignature], {
         value: totalValue,
         gasPrice: FEE_CALC_GAS_PRICE_WEI,
         gas: 8_000_000n,
@@ -609,7 +662,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     const itAmount = await encryptAmount(ctx, amount);
     await completePodOpRoundTrip(ctx, "mintEncrypted", () =>
       ctx.podAsCoti.write.mint(
-        [ctx.bob.address, itAmount, ctx.base.podTwoWayFees.callbackFeeWei],
+        [ctx.bob.address, itAmount, itAmount.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
         podTwoWayWriteOptions(ctx.base.podTwoWayFees)
       )
     );
@@ -646,7 +699,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     await assert.rejects(
       () =>
         rogue.write.mint(
-          [ctx.bob.address, itAmount, ctx.base.podTwoWayFees.callbackFeeWei],
+          [ctx.bob.address, itAmount, itAmount.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
           podTwoWayWriteOptions(ctx.base.podTwoWayFees)
         ),
       (e: unknown) => {
@@ -670,7 +723,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     await assert.rejects(
       () =>
         basePod.write.mint(
-          [ctx.bob.address, itAmount, ctx.base.podTwoWayFees.callbackFeeWei],
+          [ctx.bob.address, itAmount, itAmount.userSignature, ctx.base.podTwoWayFees.callbackFeeWei],
           podTwoWayWriteOptions(ctx.base.podTwoWayFees)
         ),
       (e: unknown) => {

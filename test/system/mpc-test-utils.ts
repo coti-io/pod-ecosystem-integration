@@ -25,8 +25,12 @@ import { decryptUint, decryptUint256 as sdkDecryptUint256, prepareIT, prepareIT2
 import {
   deriveSimAesKey,
   isSimCotiBackend,
+  prepareSimIT,
   prepareSimIT256,
   decryptSimUint256,
+  signItUserBinding,
+  userBindingDigest256,
+  userBindingDigestCt,
   SIM_COTI_CHAIN_ID,
   SimWallet,
 } from "../../../sim-coti-node/sdk/index.js";
@@ -74,13 +78,20 @@ export type TestContext = {
   };
   /** Two-way native fee wei from {@link estimateGas} on the Hardhat inbox (after oracle + min-fee configs). */
   podTwoWayFees: PodTwoWayFeeEstimate;
+  /** L1 user the service bind sig is over (`msg.sender` on encrypted Pod calls). */
+  boundUser: `0x${string}`;
 };
 
 /** Minimum context for `encryptValue` against the COTI inbox (shared by TestContext and PodTestContext). */
 export type MpcEncryptContext = {
   crypto: TestContext["crypto"];
   contracts: { inboxCoti: { address: `0x${string}` } };
+  boundUser: `0x${string}`;
 };
+
+/** Inbox miner selector (`batchProcessRequests`). */
+export const INBOX_BATCH_PROCESS_REQUESTS_SIGNATURE =
+  "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[])";
 
 export type RequestMethodCall = {
   selector: `0x${string}`;
@@ -1297,13 +1308,40 @@ export const getResponseRequestBySource = async (
 };
 
 // Encrypts an input value using the COTI wallet.
+const encryptWalletPrivateKey = (wallet: any): Hex => {
+  const pk = wallet.getPrivateKey?.() ?? wallet.privateKey;
+  if (!pk || typeof pk !== "string") {
+    throw new Error("encrypt wallet has no private key");
+  }
+  return (pk.startsWith("0x") ? pk : `0x${pk}`) as Hex;
+};
+
 export const buildEncryptedInput = async (
   ctx: MpcEncryptContext,
-  value: bigint
-): Promise<{ ciphertext: bigint; signature: `0x${string}` }> => {
-  const functionSelector = toFunctionSelector(
-      "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[])"
-  );
+  value: bigint,
+  user: `0x${string}` = ctx.boundUser
+): Promise<{
+  ciphertext: bigint;
+  signature: `0x${string}`;
+  user: `0x${string}`;
+  userSignature: `0x${string}`;
+}> => {
+  const functionSelector = toFunctionSelector(INBOX_BATCH_PROCESS_REQUESTS_SIGNATURE);
+  if (isSimCotiBackend()) {
+    const wallet = ctx.crypto.cotiEncryptWallet as unknown as SimWallet;
+    const it = await wallet.encryptValue(
+      value,
+      ctx.contracts.inboxCoti.address,
+      functionSelector,
+      user
+    );
+    return {
+      ciphertext: it.ciphertext,
+      signature: it.signature,
+      user: it.user,
+      userSignature: it.userSignature,
+    };
+  }
   const inputText = await ctx.crypto.cotiEncryptWallet.encryptValue(
     value,
     ctx.contracts.inboxCoti.address,
@@ -1314,10 +1352,11 @@ export const buildEncryptedInput = async (
       ? (inputText.signature as `0x${string}`)
       : toHex(inputText.signature as any);
   const ciphertext = normalizeCiphertextInternal(inputText.ciphertext);
-  return {
-    ciphertext,
-    signature,
-  };
+  const userSignature = await signItUserBinding(
+    encryptWalletPrivateKey(ctx.crypto.cotiEncryptWallet),
+    userBindingDigestCt(ciphertext, user)
+  );
+  return { ciphertext, signature, user, userSignature };
 };
 
 // Decodes a ctUint64-like value into a bigint ciphertext.
@@ -1373,29 +1412,43 @@ export const combine64PartsTo256 = (
 // Encrypt a 128-bit value as an itUint128 structure (single ciphertext + signature).
 export const buildEncryptedInput128 = async (
   ctx: MpcEncryptContext,
-  value: bigint
+  value: bigint,
+  user: `0x${string}` = ctx.boundUser
 ): Promise<{
   ciphertext: bigint;
   signature: `0x${string}`;
+  user: `0x${string}`;
+  userSignature: `0x${string}`;
 }> => {
-  const functionSelector = toFunctionSelector(
-    "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[])"
+  const functionSelector = toFunctionSelector(INBOX_BATCH_PROCESS_REQUESTS_SIGNATURE);
+  if (isSimCotiBackend()) {
+    const wallet = ctx.crypto.cotiEncryptWallet as unknown as SimWallet;
+    return prepareSimIT(
+      value,
+      { wallet, userKey: ctx.crypto.userKey },
+      ctx.contracts.inboxCoti.address,
+      functionSelector,
+      user
+    );
+  }
+  const it = prepareIT(
+    value,
+    {
+      wallet: ctx.crypto.cotiEncryptWallet as any,
+      userKey: ctx.crypto.userKey,
+    },
+    ctx.contracts.inboxCoti.address,
+    functionSelector
   );
-
-  const it = prepareIT(value, {
-    wallet: ctx.crypto.cotiEncryptWallet as any,
-    userKey: ctx.crypto.userKey,
-  }, ctx.contracts.inboxCoti.address, functionSelector);
-
   const signature =
     typeof it.signature === "string"
       ? (it.signature as `0x${string}`)
       : toHex(it.signature as any);
-
-  return {
-    ciphertext: it.ciphertext,
-    signature,
-  };
+  const userSignature = await signItUserBinding(
+    encryptWalletPrivateKey(ctx.crypto.cotiEncryptWallet),
+    userBindingDigestCt(it.ciphertext, user)
+  );
+  return { ciphertext: it.ciphertext, signature, user, userSignature };
 };
 
 // Decode a ctUint128 value (single uint256 ciphertext).
@@ -1421,45 +1474,44 @@ export const decryptUint128 = (
 // Encrypt a 256-bit value as an itUint256 structure (inbox-validated; signer must be miner / tx.origin).
 export const buildEncryptedInput256 = async (
   ctx: MpcEncryptContext,
-  value: bigint
+  value: bigint,
+  user: `0x${string}` = ctx.boundUser
 ): Promise<{
   ciphertext: { ciphertextHigh: bigint; ciphertextLow: bigint };
   signature: `0x${string}`;
+  user: `0x${string}`;
+  userSignature: `0x${string}`;
 }> => {
-  const functionSelector = toFunctionSelector(
-    "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[])"
-  );
+  const functionSelector = toFunctionSelector(INBOX_BATCH_PROCESS_REQUESTS_SIGNATURE);
 
-  let it: { ciphertext: { ciphertextHigh: bigint; ciphertextLow: bigint }; signature: string | `0x${string}` };
   if (isSimCotiBackend()) {
     const wallet = ctx.crypto.cotiEncryptWallet as SimWallet;
-    it = await prepareSimIT256(
+    return prepareSimIT256(
       value,
       { wallet, userKey: ctx.crypto.userKey },
       ctx.contracts.inboxCoti.address,
-      functionSelector
-    );
-  } else {
-    it = prepareIT256(
-      value,
-      {
-        wallet: ctx.crypto.cotiEncryptWallet as any,
-        userKey: ctx.crypto.userKey,
-      },
-      ctx.contracts.inboxCoti.address,
-      functionSelector
+      functionSelector,
+      user
     );
   }
-
+  const it = prepareIT256(
+    value,
+    {
+      wallet: ctx.crypto.cotiEncryptWallet as any,
+      userKey: ctx.crypto.userKey,
+    },
+    ctx.contracts.inboxCoti.address,
+    functionSelector
+  );
   const signature =
     typeof it.signature === "string"
       ? (it.signature as `0x${string}`)
       : toHex(it.signature as any);
-
-  return {
-    ciphertext: it.ciphertext,
-    signature,
-  };
+  const userSignature = await signItUserBinding(
+    encryptWalletPrivateKey(ctx.crypto.cotiEncryptWallet),
+    userBindingDigest256(it.ciphertext.ciphertextHigh, it.ciphertext.ciphertextLow, user)
+  );
+  return { ciphertext: it.ciphertext, signature, user, userSignature };
 };
 
 // Decode a ctUint256 structure.
@@ -1715,6 +1767,7 @@ export const setupContext = async (params: {
     coti: { publicClient: cotiPublicClient, wallet: cotiWallet },
     contracts: { inboxSepolia, inboxCoti, mpcAdder, mpcAdderAsCoti, mpcExecutor },
     crypto: { userKey, cotiEncryptWallet: cotiEncryptWallet as CotiWallet },
+    boundUser: sepoliaWallet.account.address as `0x${string}`,
     chainIds: { sepolia: sepoliaChainId, coti: cotiChainId },
     podTwoWayFees,
   };
@@ -1729,6 +1782,7 @@ export type TestContextWideMpc = {
     mpcAdderAsCoti: any;
   };
   crypto: TestContext["crypto"];
+  boundUser: `0x${string}`;
   chainIds: TestContext["chainIds"];
   podTwoWayFees: PodTwoWayFeeEstimate;
 };
@@ -1938,6 +1992,7 @@ export const setupContextWideMpc = async (
       mpcExecutor,
     },
     crypto: { userKey, cotiEncryptWallet },
+    boundUser: sepoliaWallet.account.address as `0x${string}`,
     chainIds: { sepolia: sepoliaChainId, coti: cotiChainId },
     podTwoWayFees,
   };
@@ -2004,6 +2059,7 @@ export type PodTestContext = {
     podTestAsCoti: any;
   };
   crypto: TestContext["crypto"];
+  boundUser: `0x${string}`;
   chainIds: TestContext["chainIds"];
   podContractName: PodTestContractName;
   podTwoWayFees: PodTwoWayFeeEstimate;
@@ -2226,6 +2282,7 @@ export const setupPodTestContext = async (params: {
       podTestAsCoti,
     },
     crypto: { userKey, cotiEncryptWallet },
+    boundUser: sepoliaWallet.account.address as `0x${string}`,
     chainIds: { sepolia: sepoliaChainId, coti: cotiChainId },
     podContractName: params.podContractName,
     podTwoWayFees,

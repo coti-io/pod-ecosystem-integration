@@ -31,6 +31,8 @@ import {
   simEncryptUint128,
   buildSimItSignature,
   simDecryptUint128,
+  signItUserBinding,
+  userBindingDigestCt,
   type CtUint256,
   type ItUint128,
   type ItUint256,
@@ -257,9 +259,10 @@ export async function encryptUint64(
   wallet: SimWallet,
   plain: bigint | number,
   contractAddress: string,
-  functionSelector: string
+  functionSelector: string,
+  user: `0x${string}` = wallet.address
 ): Promise<ItUint64> {
-  return wallet.encryptValue(plain, contractAddress, functionSelector);
+  return wallet.encryptValue(plain, contractAddress, functionSelector, user);
 }
 
 export async function encryptUint128(
@@ -279,16 +282,21 @@ export async function encryptUint128(
       : `0x${functionSelector}`) as `0x${string}`,
     ciphertext,
   });
-  return { ciphertext, signature };
+  const userSignature = await signItUserBinding(
+    wallet.getPrivateKey(),
+    userBindingDigestCt(ciphertext, wallet.address)
+  );
+  return { ciphertext, signature, user: wallet.address, userSignature };
 }
 
 export async function encryptUint256(
   wallet: SimWallet,
   plain: bigint | number,
   contractAddress: string,
-  functionSelector: string
+  functionSelector: string,
+  user: `0x${string}` = wallet.address
 ): Promise<ItUint256> {
-  return wallet.encryptValue256(plain, contractAddress, functionSelector);
+  return wallet.encryptValue256(plain, contractAddress, functionSelector, user);
 }
 
 export function decryptUint64(ciphertext: bigint, userKey: string): bigint {
