@@ -19,6 +19,8 @@ import {
   waitMined,
 } from "../../scripts/deploy-utils.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../../scripts/deploy-test-inbox.js";
+import { enableInboxAuth } from "../../scripts/test-helpers/verifier.js";
+import { signedMineArgs } from "../../scripts/test-helpers/mine-bind.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { ONBOARD_CONTRACT_ADDRESS, Wallet as CotiWallet } from "@coti-io/coti-ethers";
 import { decryptUint, decryptUint256 as sdkDecryptUint256, prepareIT, prepareIT256 } from "@coti-io/coti-sdk-typescript";
@@ -28,12 +30,10 @@ import {
   prepareSimIT,
   prepareSimIT256,
   decryptSimUint256,
-  signItUserBinding,
-  userBindingDigest256,
-  userBindingDigestCt,
   SIM_COTI_CHAIN_ID,
   SimWallet,
 } from "../../../sim-coti-node/sdk/index.js";
+
 import { JsonRpcProvider } from "ethers";
 
 /**
@@ -91,7 +91,7 @@ export type MpcEncryptContext = {
 
 /** Inbox miner selector (`batchProcessRequests`). */
 export const INBOX_BATCH_PROCESS_REQUESTS_SIGNATURE =
-  "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[])";
+  "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[],bytes)";
 
 export type RequestMethodCall = {
   selector: `0x${string}`;
@@ -525,6 +525,8 @@ export async function ensureMpcInboxOracleAndFees(params: {
   );
   await waitMined(publicClient, boundsHash);
   logStep(`${label}: setGasPriceBounds pinned to estimate assumed gas price`);
+  await enableInboxAuth(inbox, deployer);
+  logStep(`${label}: setVerifier (hh0)`);
 }
 
 /** Peg inbox PriceOracle legs to 1 USD / 1 USD (unit-test style fee math). */
@@ -1143,15 +1145,12 @@ export const mineRequest = async (
     }
   }
   const txHash = (await inbox.write.batchProcessRequests(
-    [
-      sourceChainId,
-      [
-        {
-          ...toMinedRequest(request, targetFeeForMine),
-          requestId: nextRequestId,
-        },
-      ],
-    ],
+    await signedMineArgs(inbox, sourceChainId, [
+      {
+        ...toMinedRequest(request, targetFeeForMine),
+        requestId: nextRequestId,
+      },
+    ]),
     writeOptions
   )) as `0x${string}`;
   logStep(`${label}: waiting for ${chainLabel} tx ${txHash}`);
@@ -1308,14 +1307,6 @@ export const getResponseRequestBySource = async (
 };
 
 // Encrypts an input value using the COTI wallet.
-const encryptWalletPrivateKey = (wallet: any): Hex => {
-  const pk = wallet.getPrivateKey?.() ?? wallet.privateKey;
-  if (!pk || typeof pk !== "string") {
-    throw new Error("encrypt wallet has no private key");
-  }
-  return (pk.startsWith("0x") ? pk : `0x${pk}`) as Hex;
-};
-
 export const buildEncryptedInput = async (
   ctx: MpcEncryptContext,
   value: bigint,
@@ -1324,7 +1315,6 @@ export const buildEncryptedInput = async (
   ciphertext: bigint;
   signature: `0x${string}`;
   user: `0x${string}`;
-  userSignature: `0x${string}`;
 }> => {
   const functionSelector = toFunctionSelector(INBOX_BATCH_PROCESS_REQUESTS_SIGNATURE);
   if (isSimCotiBackend()) {
@@ -1339,7 +1329,6 @@ export const buildEncryptedInput = async (
       ciphertext: it.ciphertext,
       signature: it.signature,
       user: it.user,
-      userSignature: it.userSignature,
     };
   }
   const inputText = await ctx.crypto.cotiEncryptWallet.encryptValue(
@@ -1352,11 +1341,7 @@ export const buildEncryptedInput = async (
       ? (inputText.signature as `0x${string}`)
       : toHex(inputText.signature as any);
   const ciphertext = normalizeCiphertextInternal(inputText.ciphertext);
-  const userSignature = await signItUserBinding(
-    encryptWalletPrivateKey(ctx.crypto.cotiEncryptWallet),
-    userBindingDigestCt(ciphertext, user)
-  );
-  return { ciphertext, signature, user, userSignature };
+  return { ciphertext, signature, user };
 };
 
 // Decodes a ctUint64-like value into a bigint ciphertext.
@@ -1418,7 +1403,6 @@ export const buildEncryptedInput128 = async (
   ciphertext: bigint;
   signature: `0x${string}`;
   user: `0x${string}`;
-  userSignature: `0x${string}`;
 }> => {
   const functionSelector = toFunctionSelector(INBOX_BATCH_PROCESS_REQUESTS_SIGNATURE);
   if (isSimCotiBackend()) {
@@ -1444,11 +1428,7 @@ export const buildEncryptedInput128 = async (
     typeof it.signature === "string"
       ? (it.signature as `0x${string}`)
       : toHex(it.signature as any);
-  const userSignature = await signItUserBinding(
-    encryptWalletPrivateKey(ctx.crypto.cotiEncryptWallet),
-    userBindingDigestCt(it.ciphertext, user)
-  );
-  return { ciphertext: it.ciphertext, signature, user, userSignature };
+  return { ciphertext: it.ciphertext, signature, user };
 };
 
 // Decode a ctUint128 value (single uint256 ciphertext).
@@ -1480,10 +1460,8 @@ export const buildEncryptedInput256 = async (
   ciphertext: { ciphertextHigh: bigint; ciphertextLow: bigint };
   signature: `0x${string}`;
   user: `0x${string}`;
-  userSignature: `0x${string}`;
 }> => {
   const functionSelector = toFunctionSelector(INBOX_BATCH_PROCESS_REQUESTS_SIGNATURE);
-
   if (isSimCotiBackend()) {
     const wallet = ctx.crypto.cotiEncryptWallet as SimWallet;
     return prepareSimIT256(
@@ -1507,11 +1485,7 @@ export const buildEncryptedInput256 = async (
     typeof it.signature === "string"
       ? (it.signature as `0x${string}`)
       : toHex(it.signature as any);
-  const userSignature = await signItUserBinding(
-    encryptWalletPrivateKey(ctx.crypto.cotiEncryptWallet),
-    userBindingDigest256(it.ciphertext.ciphertextHigh, it.ciphertext.ciphertextLow, user)
-  );
-  return { ciphertext: it.ciphertext, signature, user, userSignature };
+  return { ciphertext: it.ciphertext, signature, user };
 };
 
 // Decode a ctUint256 structure.

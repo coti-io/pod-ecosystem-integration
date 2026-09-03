@@ -5,8 +5,6 @@ import { privateKeyToAccount } from "viem/accounts";
 import { decryptUint, prepareIT256 } from "@coti-io/coti-sdk-typescript";
 import {
   prepareSimIT256,
-  signItUserBinding,
-  userBindingDigest256,
 } from "../../../sim-coti-node/sdk/index.js";
 import { ONBOARD_CONTRACT_ADDRESS, transferNative, Wallet as CotiWallet } from "@coti-io/coti-ethers";
 import { createWalletClient, custom, encodeFunctionData, decodeAbiParameters, parseAbi, parseEther, toFunctionSelector, toHex } from "viem";
@@ -530,11 +528,7 @@ export async function encryptAmountAsBob(ctx: PodTokenTestContext, amount: bigin
     typeof it.signature === "string"
       ? (it.signature as `0x${string}`)
       : toHex(it.signature as any);
-  const userSignature = await signItUserBinding(
-    ctx.bob.privateKey,
-    userBindingDigest256(it.ciphertext.ciphertextHigh, it.ciphertext.ciphertextLow, user)
-  );
-  return { ciphertext: it.ciphertext, signature, user, userSignature };
+  return { ciphertext: it.ciphertext, signature, user };
 }
 
 /** UTF-8 string from app-raise `failedRequests` bytes (raw reason) or system {ErrorData}.message. */
