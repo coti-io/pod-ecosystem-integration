@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import { network } from "hardhat";
 import { encodeFunctionData, parseAbi } from "viem";
 import { deployInboxWithInit } from "../system/mpc-test-utils.js";
+import { enableInboxAuth } from "../../scripts/test-helpers/verifier.js";
+import { signedMineArgs } from "../../scripts/test-helpers/mine-bind.js";
 import { oracleTokensForChain } from "../../scripts/oracle-tokens.js";
 
 const CONSTANT_FEE = {
@@ -86,6 +88,7 @@ describe("PodErc20CotiMother", { concurrency: 1 }, async function () {
     const pToken = "0x00000000000000000000000000000000000000b2" as `0x${string}`;
 
     await cotiInbox.write.addMiner([owner], { account: owner });
+    await enableInboxAuth(cotiInbox, owner);
     await mother.write.setAllowedFactory([sourceChainId, owner, true], { account: owner });
 
     const data = encodeFunctionData({
@@ -111,9 +114,7 @@ describe("PodErc20CotiMother", { concurrency: 1 }, async function () {
     const request = requests[0];
 
     await cotiInbox.write.batchProcessRequests(
-      [
-        sourceChainId,
-        [
+      await signedMineArgs(cotiInbox, sourceChainId, [
           {
             requestId: request.requestId,
             sourceContract: owner,
@@ -126,8 +127,7 @@ describe("PodErc20CotiMother", { concurrency: 1 }, async function () {
             targetFee: 2_500_000n,
             callerFee: request.callerFee,
           },
-        ],
-      ],
+      ]),
       { account: owner, gas: 8_000_000n }
     );
 
@@ -148,6 +148,7 @@ describe("PodErc20CotiMother", { concurrency: 1 }, async function () {
     const pToken = "0x00000000000000000000000000000000000000b3" as `0x${string}`;
 
     await cotiInbox.write.addMiner([owner], { account: owner });
+    await enableInboxAuth(cotiInbox, owner);
     await mother.write.setAllowedFactory([sourceChainId, owner, true], { account: owner });
 
     const registerOnce = async () => {
@@ -171,9 +172,7 @@ describe("PodErc20CotiMother", { concurrency: 1 }, async function () {
       const requests = await sourceInbox.read.getRequests([cotiChainId, requestCount - 1n, 1n]);
       const request = requests[0];
       await cotiInbox.write.batchProcessRequests(
-        [
-          sourceChainId,
-          [
+        await signedMineArgs(cotiInbox, sourceChainId, [
             {
               requestId: request.requestId,
               sourceContract: owner,
@@ -186,8 +185,7 @@ describe("PodErc20CotiMother", { concurrency: 1 }, async function () {
               targetFee: 2_500_000n,
               callerFee: request.callerFee,
             },
-          ],
-        ],
+        ]),
         { account: owner, gas: 8_000_000n }
       );
     };
@@ -209,6 +207,7 @@ describe("PodErc20CotiMother", { concurrency: 1 }, async function () {
     const pTokenB = "0x00000000000000000000000000000000000000c2" as `0x${string}`;
 
     await cotiInbox.write.addMiner([owner], { account: owner });
+    await enableInboxAuth(cotiInbox, owner);
     await mother.write.setAllowedFactory([sourceChainId, owner, true], { account: owner });
 
     for (const [pToken, symbol] of [
@@ -235,9 +234,7 @@ describe("PodErc20CotiMother", { concurrency: 1 }, async function () {
       const requests = await sourceInbox.read.getRequests([cotiChainId, requestCount - 1n, 1n]);
       const request = requests[0];
       await cotiInbox.write.batchProcessRequests(
-        [
-          sourceChainId,
-          [
+        await signedMineArgs(cotiInbox, sourceChainId, [
             {
               requestId: request.requestId,
               sourceContract: owner,
@@ -250,8 +247,7 @@ describe("PodErc20CotiMother", { concurrency: 1 }, async function () {
               targetFee: 2_500_000n,
               callerFee: request.callerFee,
             },
-          ],
-        ],
+        ]),
         { account: owner, gas: 8_000_000n }
       );
     }

@@ -32,6 +32,7 @@ import {
   resolveRpcUrl,
   type GasPriceBoundsTuple,
 } from "./deploy-utils.js";
+import { signedMineArgs } from "./test-helpers/mine-bind.js";
 import { collectRoleMismatches, formatRoleMismatches } from "./roles-check.js";
 import {
   buildEncryptedInput,
@@ -192,9 +193,7 @@ const mineInbound = async (params: {
 
   console.log(`  → mining on ${chainLabel}: requestId=${request.requestId} targetFee=${targetFee} gas=${gas}`);
   const hash = (await inbox.write.batchProcessRequests(
-    [
-      sourceChainId,
-      [
+    await signedMineArgs(inbox, sourceChainId, [
         {
           requestId: request.requestId,
           sourceContract: request.originalSender,
@@ -207,8 +206,7 @@ const mineInbound = async (params: {
           targetFee,
           callerFee: request.callerFee,
         },
-      ],
-    ],
+    ]),
     { account: walletClient.account, gas }
   )) as `0x${string}`;
 

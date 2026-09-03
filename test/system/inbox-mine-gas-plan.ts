@@ -32,6 +32,8 @@ import {
   type SystemInboxFeeConfig,
   type TestContext,
 } from "./mpc-test-utils.js";
+import { bindMinedRequests } from "../../scripts/test-helpers/mine-bind.js";
+import { mineArgs } from "../../scripts/test-helpers/verifier.js";
 
 const runSuite = process.env.INBOX_MINE_GAS_SYSTEM_TESTS === "1";
 const d = runSuite ? describe : describe.skip;
@@ -191,8 +193,9 @@ async function planAndMine(params: {
   const account = ctx.coti.wallet.account.address as `0x${string}`;
   const sourceChainId = BigInt(ctx.chainIds.sepolia);
 
+  const bound = await bindMinedRequests(mined);
   const plan = await planMineBatch({
-    requests: mined,
+    requests: bound,
     config: { ...DEFAULT_MINE_GAS_CONFIG, maxBatchGas: 15_000_000n, maxUserGas: 5_000_000n, ...config },
     estimateRequest: async (req, maxUserGas) =>
       callEstimateExecutionGasForMiner({
@@ -204,10 +207,11 @@ async function planAndMine(params: {
         account,
       }),
     estimateTxGas: async (selected) => {
+      const args = await mineArgs(inbox, sourceChainId, selected);
       const data = encodeFunctionData({
         abi: inbox.abi,
         functionName: "batchProcessRequests",
-        args: [sourceChainId, selected],
+        args,
       });
       return publicClient.estimateGas({
         account,
@@ -222,7 +226,9 @@ async function planAndMine(params: {
     `${label}: projected=${plan.projectedBatchGas} ethEst=${plan.ethEstimateGas} gasLimit=${plan.gasLimit}`
   );
 
-  const txHash = (await inbox.write.batchProcessRequests([sourceChainId, plan.selected], {
+  const txHash = (await inbox.write.batchProcessRequests(
+    await mineArgs(inbox, sourceChainId, plan.selected),
+    {
     account,
     gas: plan.gasLimit,
   })) as Hex;
