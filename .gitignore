@@ -148,3 +148,4 @@ artifacts/
 cache/
 types/
 .fork-cli.pids.json
+secrets/

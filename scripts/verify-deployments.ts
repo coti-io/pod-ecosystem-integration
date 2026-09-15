@@ -3,19 +3,34 @@
  *
  * 1. Prints inbox fee templates, gas-price bounds, oracle USD legs, and wiring for each deployed chain.
  * 2. Warns when on-chain roles differ from central `deployConfig.roles` (same intent on every chain).
- * 3. For every source EVM with `mpcAdder` + COTI `cotiExecutor` (e.g. Sepolia, Fuji), runs
- *    `MpcAdder.add` → mine on COTI → mine callback on source (two-way round-trip) and decrypts a+b.
+ * 3. For every source EVM with `mpcAdder` + COTI `cotiExecutor`, runs `MpcAdder.add`
+ *    then either locally mines both legs (default) or waits for the relayer stack
+ *    (`--wait-relayer`) and decrypts a+b.
  *
  * Usage:
  *   npm run verify:deployments
  *   npm run verify:deployments -- --config-only
  *   npm run verify:deployments -- --chains=sepolia,avalancheFuji
+ *   DEPLOY_CONFIG=deployConfig.mainnet.yaml npm run verify:deployments -- --chains=avalanche --wait-relayer
  *
- * Requires PRIVATE_KEY (source) and COTI_TESTNET_PRIVATE_KEY (or PRIVATE_KEY) with miner rights on both inboxes.
+ * Requires a funded source/COTI signer (`AVALANCHE_PRIVATE_KEY` / `COTI_MAINNET_PRIVATE_KEY`
+ * or `PRIVATE_KEY`). Local mining also needs that wallet registered as an inbox miner.
+ * `--wait-relayer` does **not** call `batchProcessRequests`; CMS/NBE/HWS must be up.
+ * It encrypts **only** via `ENCRYPTION_URL` (pod-encryption-service) and quotes fees
+ * with on-chain `calculateTwoWayFeeRequiredInLocalToken` using the encoded `add64`
+ * method-call size and inbox `_referenceGasPrice` (not a 512-byte stub).
  */
 import "dotenv/config";
 import { network } from "hardhat";
-import { formatEther, formatUnits, toFunctionSelector, zeroAddress, type Address } from "viem";
+import {
+  concatHex,
+  encodeAbiParameters,
+  formatEther,
+  formatUnits,
+  toFunctionSelector,
+  zeroAddress,
+  type Address,
+} from "viem";
 import { ONBOARD_CONTRACT_ADDRESS, Wallet as CotiWallet } from "@coti-io/coti-ethers";
 import { decryptUint } from "@coti-io/coti-sdk-typescript";
 import { JsonRpcProvider } from "ethers";
@@ -47,9 +62,11 @@ import {
 } from "../test/system/mpc-test-utils.js";
 
 const COTI_TESTNET_CHAIN_ID = 7082400;
+const COTI_MAINNET_CHAIN_ID = 2632500;
 const SOURCE_NETWORKS = [
   { name: "sepolia", chainId: 11155111, label: "Sepolia" },
   { name: "avalancheFuji", chainId: 43113, label: "Avalanche Fuji" },
+  { name: "avalanche", chainId: 43114, label: "Avalanche" },
 ] as const;
 
 const FEE_FIELDS = [
@@ -81,6 +98,9 @@ const isAddr = (v: unknown): v is Address =>
 
 const CLI_FLAGS = process.argv.slice(2);
 const CONFIG_ONLY = CLI_FLAGS.includes("--config-only") || CLI_FLAGS.includes("--skip-add");
+const WAIT_RELAYER =
+  CLI_FLAGS.includes("--wait-relayer") || process.env.WAIT_RELAYER === "1";
+const RELAYER_WAIT_MS = Number(process.env.RELAYER_WAIT_MS || 600_000);
 const chainsFlag = CLI_FLAGS.find((f) => f.startsWith("--chains="));
 const CHAIN_FILTER = chainsFlag
   ? new Set(
@@ -140,6 +160,174 @@ const formatFee = (f: FeeTuple): string =>
   `gpMul=${f.gasPriceMul} gpDiv=${f.gasPriceDiv}`;
 
 const feeEq = (a: FeeTuple, b: FeeTuple): boolean => FEE_FIELDS.every((k) => a[k] === b[k]);
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitRelayerLabel = () =>
+  WAIT_RELAYER
+    ? "config + MpcAdder.add (wait for relayer, no local mine)"
+    : "config + MpcAdder.add round-trips (local mine)";
+
+
+const waitUntil = async (label: string, fn: () => Promise<boolean>, timeoutMs: number): Promise<void> => {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await fn()) return;
+    const elapsed = Math.round((Date.now() - start) / 1000);
+    console.log(`  … waiting ${label} (${elapsed}s)`);
+    await sleep(5_000);
+  }
+  throw new Error(`timeout waiting for ${label} after ${timeoutMs}ms (relayer stack not mining?)`);
+};
+
+/** Matches `MpcAbiCodec.MpcDataType` (ADDRESS=1, IT_UINT64=14). */
+const MPC_DT_ADDRESS = 1;
+const MPC_DT_IT_UINT64 = 14;
+
+/** TS `encodeAbiParameters` can sit a few bytes under Solidity `abi.encode` of the struct. */
+const METHOD_CALL_SIZE_HEADROOM = 64n;
+
+const bytes8FromU8 = (n: number): `0x${string}` =>
+  `0x${n.toString(16).padStart(16, "0")}`;
+
+const bytes32FromByteLen = (hex: `0x${string}`): `0x${string}` =>
+  `0x${BigInt((hex.length - 2) / 2).toString(16).padStart(64, "0")}`;
+
+const encodeItUint64Arg = (it: {
+  ciphertext: bigint;
+  signature: `0x${string}`;
+}): `0x${string}` =>
+  encodeAbiParameters(
+    [
+      {
+        type: "tuple",
+        components: [
+          { name: "ciphertext", type: "uint256" },
+          { name: "signature", type: "bytes" },
+        ],
+      },
+    ],
+    [{ ciphertext: it.ciphertext, signature: it.signature }]
+  );
+
+/**
+ * `abi.encode(methodCall).length` for PodLib64 `add64(itA, itB, cOwner)`.
+ * Inbox `validateAndPrepareTwoWayFees` uses that length for both legs.
+ */
+const add64MethodCallEncodedSize = (
+  a: { ciphertext: bigint; signature: `0x${string}` },
+  b: { ciphertext: bigint; signature: `0x${string}` },
+  cOwner: Address
+): bigint => {
+  const encA = encodeItUint64Arg(a);
+  const encB = encodeItUint64Arg(b);
+  const encOwner = encodeAbiParameters([{ type: "address" }], [cOwner]);
+  const data = concatHex([encA, encB, encOwner]);
+  const hex = encodeAbiParameters(
+    [
+      { type: "bytes4" },
+      { type: "bytes" },
+      { type: "bytes8[]" },
+      { type: "bytes32[]" },
+    ],
+    [
+      toFunctionSelector("add64(uint256,uint256,address)"),
+      data,
+      [
+        bytes8FromU8(MPC_DT_IT_UINT64),
+        bytes8FromU8(MPC_DT_IT_UINT64),
+        bytes8FromU8(MPC_DT_ADDRESS),
+      ],
+      [bytes32FromByteLen(encA), bytes32FromByteLen(encB), bytes32FromByteLen(encOwner)],
+    ]
+  );
+  return BigInt((hex.length - 2) / 2);
+};
+
+/** Same formula as `FeeManager._referenceGasPrice` (basefee + tip, clamped to bounds). */
+const inboxReferenceGasPriceWei = async (
+  inbox: any,
+  publicClient: { getBlock: () => Promise<{ baseFeePerGas?: bigint | null }> }
+): Promise<bigint> => {
+  const [minPriorityFeeWei, minGasPriceWei, maxGasPriceWei] = await Promise.all([
+    inbox.read.minPriorityFeeWei() as Promise<bigint>,
+    inbox.read.minGasPriceWei() as Promise<bigint>,
+    inbox.read.maxGasPriceWei() as Promise<bigint>,
+  ]);
+  const block = await publicClient.getBlock();
+  const base = block.baseFeePerGas ?? 0n;
+  let gasPrice = base > 0n ? base + minPriorityFeeWei : minGasPriceWei;
+  const floor = minGasPriceWei > 0n ? minGasPriceWei : 2_000_000_000n;
+  if (gasPrice < floor) gasPrice = floor;
+  if (maxGasPriceWei !== 0n && gasPrice > maxGasPriceWei) gasPrice = maxGasPriceWei;
+  return gasPrice;
+};
+
+const encryptUint64ViaService = async (
+  encryptionUrl: string,
+  value: bigint
+): Promise<{ ciphertext: bigint; signature: `0x${string}` }> => {
+  const url = `${encryptionUrl.replace(/\/$/, "")}/build-encrypted-inputs`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dataType: "uint64", value: value.toString() }),
+  });
+  const body = (await res.json()) as {
+    ciphertext?: string | { ciphertextLow?: string; ciphertextHigh?: string };
+    signature?: string | string[];
+  };
+  if (!res.ok) {
+    throw new Error(`encryption service HTTP ${res.status}: ${JSON.stringify(body)}`);
+  }
+  const rawCt = body.ciphertext;
+  const ctHex =
+    typeof rawCt === "string" ? rawCt : rawCt?.ciphertextLow || rawCt?.ciphertextHigh || "";
+  if (!ctHex) {
+    throw new Error(`encryption service missing uint64 ciphertext: ${JSON.stringify(body)}`);
+  }
+  const ciphertext = BigInt(ctHex);
+  const sigRaw = Array.isArray(body.signature) ? body.signature[0] : body.signature;
+  if (!sigRaw) throw new Error("encryption service missing signature");
+  const signature = (sigRaw.startsWith("0x") ? sigRaw : `0x${sigRaw}`) as `0x${string}`;
+  return { ciphertext, signature };
+};
+
+const quoteTwoWayFeesOnChain = async (
+  sourceInbox: any,
+  methodCallSize: bigint,
+  gasPriceWei: bigint
+): Promise<{ callbackFeeWei: bigint; totalValueWei: bigint; minGasPriceWei: bigint; gasPriceWei: bigint }> => {
+  const minGasPriceWei = (await sourceInbox.read.minGasPriceWei()) as bigint;
+  const [targetFeeLocalWei, callerFeeLocalWei] = (await sourceInbox.read.calculateTwoWayFeeRequiredInLocalToken([
+    methodCallSize,
+    methodCallSize,
+    0n,
+    0n,
+    gasPriceWei,
+  ])) as [bigint, bigint];
+  // Pad the callback (local) slice only, and add the same wei to msg.value so the remote
+  // constant-fee slice stays unchanged. Protects CallbackFeeTooLow if basefee ticks up.
+  const callbackFeeWei = callerFeeLocalWei + callerFeeLocalWei / 20n + 1n;
+  return {
+    callbackFeeWei,
+    totalValueWei: targetFeeLocalWei + callbackFeeWei,
+    minGasPriceWei,
+    gasPriceWei,
+  };
+};
+
+const resolveCotiNetwork = (cfg: Record<string, any>): {
+  chainId: number;
+  name: "cotiMainnet" | "cotiTestnet";
+  label: string;
+} => {
+  const mainnetCfg = cfg.chains?.[String(COTI_MAINNET_CHAIN_ID)];
+  if (isAddr(mainnetCfg?.inbox)) {
+    return { chainId: COTI_MAINNET_CHAIN_ID, name: "cotiMainnet", label: "COTI Mainnet" };
+  }
+  return { chainId: COTI_TESTNET_CHAIN_ID, name: "cotiTestnet", label: "COTI Testnet" };
+};
 
 const usd18 = (v: bigint): string => {
   if (v === 0n) return "0";
@@ -331,14 +519,16 @@ const printChainConfig = async (
     } else {
       const adder = await getContract(clients, "MpcAdder", adderAddr);
       // mpcExecutorAddress / cotiChainId are internal; configure() also sets trustedRemote[cotiChainId].
+      const cotiPeerId =
+        clients.chainId === 43114 || clients.chainId === 1 ? COTI_MAINNET_CHAIN_ID : COTI_TESTNET_CHAIN_ID;
       const [adderInbox, trustedExec] = await Promise.all([
         adder.read.inbox() as Promise<Address>,
-        adder.read.trustedRemote([BigInt(COTI_TESTNET_CHAIN_ID)]) as Promise<Address>,
+        adder.read.trustedRemote([BigInt(cotiPeerId)]) as Promise<Address>,
       ]);
       row("address", adderAddr, true);
       row("inbox()", adderInbox, adderInbox.toLowerCase() === inboxAddr.toLowerCase());
       row(
-        `trustedRemote(${COTI_TESTNET_CHAIN_ID})`,
+        `trustedRemote(${cotiPeerId})`,
         trustedExec === zeroAddress ? "(unset)" : trustedExec,
         trustedExec !== zeroAddress
       );
@@ -378,10 +568,12 @@ const runAddRoundTrip = async (params: {
   coti: ChainClients;
   sourceCfg: Record<string, any>;
   cotiCfg: Record<string, any>;
+  cotiChainId: number;
+  waitRelayer: boolean;
   a: bigint;
   b: bigint;
 }): Promise<void> => {
-  const { source, coti, sourceCfg, cotiCfg, a, b } = params;
+  const { source, coti, sourceCfg, cotiCfg, cotiChainId, waitRelayer, a, b } = params;
   hr(`MpcAdder.add round-trip: ${source.label} ↔ COTI`);
 
   const sourceInboxAddr = sourceCfg.inbox as Address;
@@ -404,35 +596,46 @@ const runAddRoundTrip = async (params: {
   (cotiInbox as any)._publicClient = coti.publicClient;
 
   // mpcExecutorAddress is internal; trustedRemote is set by configure() to the same executor.
-  const trustedExec = (await adder.read.trustedRemote([BigInt(COTI_TESTNET_CHAIN_ID)])) as Address;
+  const trustedExec = (await adder.read.trustedRemote([BigInt(cotiChainId)])) as Address;
   if (trustedExec.toLowerCase() !== executorAddr.toLowerCase()) {
     throw new Error(
-      `MpcAdder.trustedRemote(${COTI_TESTNET_CHAIN_ID}) ${trustedExec} != deployConfig cotiExecutor ${executorAddr}. Run ConfigureAdder.`
+      `MpcAdder.trustedRemote(${cotiChainId}) ${trustedExec} != deployConfig cotiExecutor ${executorAddr}. Run ConfigureAdder.`
     );
   }
 
-  // Onboard encrypt wallet against live COTI AccountOnboard.
+  // Encrypt wallet: prefer an already-onboarded AES key so the test signer is not the deployer.
   const cotiPk =
+    optionalEnv("COTI_MAINNET_PRIVATE_KEY")?.trim() ||
     optionalEnv("COTI_TESTNET_PRIVATE_KEY")?.trim() ||
     optionalEnv("PRIVATE_KEY")?.trim() ||
     "";
-  if (!cotiPk) throw new Error("Set COTI_TESTNET_PRIVATE_KEY or PRIVATE_KEY for encryption onboard.");
+  if (!cotiPk) {
+    throw new Error("Set COTI_MAINNET_PRIVATE_KEY, COTI_TESTNET_PRIVATE_KEY, or PRIVATE_KEY for encryption.");
+  }
   const cotiRpc =
+    optionalEnv("COTI_MAINNET_RPC_URL")?.trim() ||
     optionalEnv("COTI_TESTNET_RPC_URL")?.trim() ||
     (coti.publicClient.chain?.rpcUrls?.default?.http?.[0] as string | undefined) ||
-    resolveRpcUrl(COTI_TESTNET_CHAIN_ID);
+    resolveRpcUrl(cotiChainId);
   const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
-  console.log(`  onboarding AES key via ${onboardAddress} on ${cotiRpc}…`);
-  // Live verify must NOT use onboardUser() here: under Hardhat, isSimCotiBackend() can be
-  // true and returns deriveSimAesKey, which does not match live AccountOnboard / MPC.
   const cotiProvider = new JsonRpcProvider(cotiRpc) as any;
   const cotiEncryptWallet = new CotiWallet(cotiPk.startsWith("0x") ? cotiPk : `0x${cotiPk}`, cotiProvider);
-  await cotiEncryptWallet.generateOrRecoverAes(onboardAddress);
-  let userKey = cotiEncryptWallet.getUserOnboardInfo()?.aesKey;
-  if (!userKey) throw new Error("Failed to recover AES key from AccountOnboard");
+  let userKey = optionalEnv("COTI_AES_KEY")?.trim() || "";
   if (userKey.startsWith("0x")) userKey = userKey.slice(2);
-  cotiEncryptWallet.setUserOnboardInfo({ aesKey: userKey });
-  console.log(`  AES key recovered (len=${userKey.length})`);
+  if (userKey) {
+    cotiEncryptWallet.setUserOnboardInfo({ aesKey: userKey });
+    console.log(`  using COTI_AES_KEY (len=${userKey.length})`);
+  } else {
+    console.log(`  onboarding AES key via ${onboardAddress} on ${cotiRpc}…`);
+    // Live verify must NOT use onboardUser() here: under Hardhat, isSimCotiBackend() can be
+    // true and returns deriveSimAesKey, which does not match live AccountOnboard / MPC.
+    await cotiEncryptWallet.generateOrRecoverAes(onboardAddress);
+    userKey = cotiEncryptWallet.getUserOnboardInfo()?.aesKey ?? "";
+    if (!userKey) throw new Error("Failed to recover AES key from AccountOnboard");
+    if (userKey.startsWith("0x")) userKey = userKey.slice(2);
+    cotiEncryptWallet.setUserOnboardInfo({ aesKey: userKey });
+    console.log(`  AES key recovered (len=${userKey.length})`);
+  }
 
   const encryptCtx = {
     crypto: { userKey, cotiEncryptWallet },
@@ -440,9 +643,32 @@ const runAddRoundTrip = async (params: {
   };
 
   section(`Encrypt + send add(${a}, ${b})`);
-  const itA = await buildEncryptedInput(encryptCtx as any, a);
-  const itB = await buildEncryptedInput(encryptCtx as any, b);
-  const fees = await estimateGas(sourceInbox);
+  let itA: { ciphertext: bigint; signature: `0x${string}` };
+  let itB: { ciphertext: bigint; signature: `0x${string}` };
+  let fees: { callbackFeeWei: bigint; totalValueWei: bigint };
+  if (waitRelayer) {
+    const encryptionUrl = optionalEnv("ENCRYPTION_URL")?.trim();
+    if (!encryptionUrl) {
+      throw new Error(
+        "--wait-relayer requires ENCRYPTION_URL (pod-encryption-service). Inputs are not encrypted in-process."
+      );
+    }
+    row("encryption URL", encryptionUrl);
+    itA = await encryptUint64ViaService(encryptionUrl, a);
+    itB = await encryptUint64ViaService(encryptionUrl, b);
+    const encodedSize = add64MethodCallEncodedSize(itA, itB, source.deployer);
+    const methodCallSize = encodedSize + METHOD_CALL_SIZE_HEADROOM;
+    const gasPriceWei = await inboxReferenceGasPriceWei(sourceInbox, source.publicClient);
+    row("methodCall encoded bytes", `${encodedSize} (+${METHOD_CALL_SIZE_HEADROOM} headroom)`);
+    const quoted = await quoteTwoWayFeesOnChain(sourceInbox, methodCallSize, gasPriceWei);
+    row("quote gasPriceWei", String(quoted.gasPriceWei));
+    row("on-chain minGasPriceWei", String(quoted.minGasPriceWei));
+    fees = quoted;
+  } else {
+    itA = await buildEncryptedInput(encryptCtx as any, a);
+    itB = await buildEncryptedInput(encryptCtx as any, b);
+    fees = await estimateGas(sourceInbox);
+  }
   row("fee estimate totalWei", formatEther(fees.totalValueWei));
   row("fee estimate callbackWei", formatEther(fees.callbackFeeWei));
 
@@ -456,10 +682,18 @@ const runAddRoundTrip = async (params: {
   };
   console.log(`  sending MpcAdder.add value=${formatEther(liveOpts.value)} ETH…`);
   const txHash = await adder.write.add([itA, itB, fees.callbackFeeWei], liveOpts);
-  await source.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
+  const addReceipt = await source.publicClient.waitForTransactionReceipt({
+    hash: txHash,
+    ...receiptWaitOptions,
+  });
+  if (addReceipt.status !== "success") {
+    throw new Error(
+      `MpcAdder.add reverted: ${txHash} (status=${addReceipt.status}). Check explorer revert data.`
+    );
+  }
   row("source tx", txHash, true);
 
-  const outbound = await getLatestRequest(sourceInbox, BigInt(COTI_TESTNET_CHAIN_ID));
+  const outbound = await getLatestRequest(sourceInbox, BigInt(cotiChainId));
   row("outbound requestId", outbound.requestId);
   row("targetContract", outbound.targetContract, outbound.targetContract.toLowerCase() === executorAddr.toLowerCase());
   row("isTwoWay", String(outbound.isTwoWay), outbound.isTwoWay);
@@ -471,104 +705,149 @@ const runAddRoundTrip = async (params: {
     outbound.callbackSelector === toFunctionSelector("receiveC(bytes)")
   );
 
-  section("Mine COTI leg (source → COTI)");
-  // InboxMiner requires contiguous nonces vs lastIncomingRequestId — drain any backlog first.
-  const lastIncoming = (await cotiInbox.read.lastIncomingRequestId([BigInt(source.chainId)])) as `0x${string}`;
-  let nextNonce = 1n;
-  if (lastIncoming && lastIncoming !== ("0x" + "00".repeat(32))) {
-    const unpacked = (await cotiInbox.read.unpackRequestId([lastIncoming])) as readonly [bigint, bigint, bigint];
-    nextNonce = unpacked[2] + 1n;
-  }
-  const totalOutbound = Number(await sourceInbox.read.getRequestsLen([BigInt(COTI_TESTNET_CHAIN_ID)]));
-  for (let idx = 0; idx < totalOutbound; idx++) {
-    const batch = await getRequests(sourceInbox, BigInt(COTI_TESTNET_CHAIN_ID), idx, 1);
-    const req = batch[0];
-    if (!req) continue;
-    const unpacked = (await sourceInbox.read.unpackRequestId([req.requestId])) as readonly [
-      bigint,
-      bigint,
-      bigint,
-    ];
-    const nonce = unpacked[2];
-    if (nonce < nextNonce) continue;
-    if (nonce > nextNonce) {
+  const zeroId = ("0x" + "00".repeat(32)) as `0x${string}`;
+  const assertNoCotiError = async () => {
+    const err = await cotiInbox.read.errors([outbound.requestId]);
+    const errId = getTupleField(err, "requestId", 0);
+    if (errId && errId !== zeroId) {
       throw new Error(
-        `${source.label}: missing outbound nonce ${nextNonce} (found ${nonce}); cannot mine contiguous`
+        `COTI execution error for ${outbound.requestId}: code=${getTupleField(err, "errorCode", 1)} msg=${getTupleField(err, "errorMessage", 2)}`
       );
     }
-    const isLatest = req.requestId.toLowerCase() === outbound.requestId.toLowerCase();
-    console.log(`  mining COTI nonce=${nonce}${isLatest ? " (round-trip)" : " (backlog)"}…`);
-    try {
-      await mineInbound({
-        label: `${source.label}->COTI`,
-        inbox: cotiInbox,
-        publicClient: coti.publicClient,
-        walletClient: coti.walletClient,
-        sourceChainId: BigInt(source.chainId),
-        request: req,
-        chainLabel: "COTI",
-      });
-    } catch (err) {
-      if (isLatest) throw err;
-      console.warn(
-        `  backlog nonce ${nonce} mine/exec failed (continuing):`,
-        err instanceof Error ? err.message : err
-      );
-    }
-    nextNonce = nonce + 1n;
-    if (isLatest) break;
-  }
+  };
 
-  const err = await cotiInbox.read.errors([outbound.requestId]);
-  const errId = getTupleField(err, "requestId", 0);
-  if (errId && errId !== "0x0000000000000000000000000000000000000000000000000000000000000000") {
-    throw new Error(
-      `COTI execution error for ${outbound.requestId}: code=${getTupleField(err, "errorCode", 1)} msg=${getTupleField(err, "errorMessage", 2)}`
+  if (waitRelayer) {
+    section("Wait for relayer (source → COTI, no local mine)");
+    await waitUntil(
+      "COTI inboxResponses",
+      async () => {
+        await assertNoCotiError();
+        try {
+          await getResponseRequestBySource(cotiInbox, outbound.requestId, `${source.label}->COTI`);
+          return true;
+        } catch (err) {
+          if (err instanceof Error && err.message.includes("Missing COTI response")) return false;
+          throw err;
+        }
+      },
+      RELAYER_WAIT_MS
     );
+  } else {
+    section("Mine COTI leg (source → COTI)");
+    // InboxMiner requires contiguous nonces vs lastIncomingRequestId — drain any backlog first.
+    const lastIncoming = (await cotiInbox.read.lastIncomingRequestId([BigInt(source.chainId)])) as `0x${string}`;
+    let nextNonce = 1n;
+    if (lastIncoming && lastIncoming !== zeroId) {
+      const unpacked = (await cotiInbox.read.unpackRequestId([lastIncoming])) as readonly [bigint, bigint, bigint];
+      nextNonce = unpacked[2] + 1n;
+    }
+    const totalOutbound = Number(await sourceInbox.read.getRequestsLen([BigInt(cotiChainId)]));
+    for (let idx = 0; idx < totalOutbound; idx++) {
+      const batch = await getRequests(sourceInbox, BigInt(cotiChainId), idx, 1);
+      const req = batch[0];
+      if (!req) continue;
+      const unpacked = (await sourceInbox.read.unpackRequestId([req.requestId])) as readonly [
+        bigint,
+        bigint,
+        bigint,
+      ];
+      const nonce = unpacked[2];
+      if (nonce < nextNonce) continue;
+      if (nonce > nextNonce) {
+        throw new Error(
+          `${source.label}: missing outbound nonce ${nextNonce} (found ${nonce}); cannot mine contiguous`
+        );
+      }
+      const isLatest = req.requestId.toLowerCase() === outbound.requestId.toLowerCase();
+      console.log(`  mining COTI nonce=${nonce}${isLatest ? " (round-trip)" : " (backlog)"}…`);
+      try {
+        await mineInbound({
+          label: `${source.label}->COTI`,
+          inbox: cotiInbox,
+          publicClient: coti.publicClient,
+          walletClient: coti.walletClient,
+          sourceChainId: BigInt(source.chainId),
+          request: req,
+          chainLabel: "COTI",
+        });
+      } catch (err) {
+        if (isLatest) throw err;
+        console.warn(
+          `  backlog nonce ${nonce} mine/exec failed (continuing):`,
+          err instanceof Error ? err.message : err
+        );
+      }
+      nextNonce = nonce + 1n;
+      if (isLatest) break;
+    }
+    await assertNoCotiError();
   }
 
   const responseRequest = await getResponseRequestBySource(cotiInbox, outbound.requestId, `${source.label}->COTI`);
   row("response requestId", responseRequest.requestId);
   row("response target", responseRequest.targetContract, responseRequest.targetContract.toLowerCase() === adderAddr.toLowerCase());
 
-  section(`Mine ${source.label} callback (COTI → source)`);
-  await mineInbound({
-    label: `COTI->${source.label}`,
-    inbox: sourceInbox,
-    publicClient: source.publicClient,
-    walletClient: source.walletClient,
-    sourceChainId: BigInt(COTI_TESTNET_CHAIN_ID),
-    request: responseRequest,
-    chainLabel: source.label,
-  });
-
-  const sourceOutbound = parseRequest(await sourceInbox.read.requests([outbound.requestId]));
-  row("original executed", String(sourceOutbound.executed), sourceOutbound.executed);
+  if (waitRelayer) {
+    section(`Wait for relayer callback (COTI → ${source.label}, no local mine)`);
+  } else {
+    section(`Mine ${source.label} callback (COTI → source)`);
+    await mineInbound({
+      label: `COTI->${source.label}`,
+      inbox: sourceInbox,
+      publicClient: source.publicClient,
+      walletClient: source.walletClient,
+      sourceChainId: BigInt(cotiChainId),
+      request: responseRequest,
+      chainLabel: source.label,
+    });
+  }
 
   section("Decrypt result");
-  const encryptedResult = await adder.read.resultCiphertext();
-  const decrypted = decryptUint(decodeCtUint64(encryptedResult), userKey);
-  row("ciphertext", String(decodeCtUint64(encryptedResult)));
-  row("decrypted", String(decrypted), decrypted === a + b);
-  row("expected a+b", String(a + b));
-  if (decrypted !== a + b) {
-    throw new Error(`Decrypt mismatch: got ${decrypted}, expected ${a + b}`);
+  let decrypted = 0n;
+  const readDecrypt = async (): Promise<boolean> => {
+    const encryptedResult = await adder.read.resultCiphertext();
+    const value = decryptUint(decodeCtUint64(encryptedResult), userKey);
+    if (value === a + b) {
+      decrypted = value;
+      row("ciphertext", String(decodeCtUint64(encryptedResult)));
+      row("decrypted", String(value), true);
+      row("expected a+b", String(a + b));
+      return true;
+    }
+    return false;
+  };
+  if (waitRelayer) {
+    await waitUntil("adder resultCiphertext == a+b", readDecrypt, RELAYER_WAIT_MS);
+  } else {
+    const sourceOutbound = parseRequest(await sourceInbox.read.requests([outbound.requestId]));
+    row("original executed", String(sourceOutbound.executed), sourceOutbound.executed);
+    if (!(await readDecrypt())) {
+      const encryptedResult = await adder.read.resultCiphertext();
+      decrypted = decryptUint(decodeCtUint64(encryptedResult), userKey);
+      row("ciphertext", String(decodeCtUint64(encryptedResult)));
+      row("decrypted", String(decrypted), decrypted === a + b);
+      row("expected a+b", String(a + b));
+      throw new Error(`Decrypt mismatch: got ${decrypted}, expected ${a + b}`);
+    }
   }
   console.log(`  ✓ ${source.label} ↔ COTI add round-trip OK (${a}+${b}=${decrypted})`);
 };
 
 const main = async () => {
   const cfg = await readDeployConfig();
-  const cotiCfg = (cfg.chains?.[String(COTI_TESTNET_CHAIN_ID)] ?? {}) as Record<string, any>;
+  const cotiNet = resolveCotiNetwork(cfg);
+  const cotiCfg = (cfg.chains?.[String(cotiNet.chainId)] ?? {}) as Record<string, any>;
 
   console.log("PoD deployment verification");
   console.log(`  deployConfig inboxSalt.label = ${cfg.inboxSalt?.label ?? "(none)"}`);
   console.log(`  deterministic inbox address  = ${cfg.inboxSalt?.address || "(empty)"}`);
   if (cfg.inboxSalt?.bytecodeNote) console.log(`  note: ${cfg.inboxSalt.bytecodeNote}`);
   if (cfg.inboxSalt?.runbook) console.log(`  runbook: ${cfg.inboxSalt.runbook}`);
-  console.log(`  mode: ${CONFIG_ONLY ? "config-only (no add round-trips)" : "config + MpcAdder.add round-trips"}`);
+  console.log(
+    `  mode: ${CONFIG_ONLY ? "config-only (no add round-trips)" : waitRelayerLabel()}`
+  );
 
-  const coti = await connectNetwork("cotiTestnet", "COTI Testnet");
+  const coti = await connectNetwork(cotiNet.name, cotiNet.label);
   const cotiStatus = await printChainConfig(coti, cotiCfg, "coti");
 
   const results: {
@@ -609,13 +888,15 @@ const main = async () => {
 
     try {
       // Distinct plaintext per chain so ciphertext/results are obviously different in logs.
-      const a = net.chainId === 43113 ? 21n : 12n;
-      const b = net.chainId === 43113 ? 34n : 30n;
+      const a = net.chainId === 43113 || net.chainId === 43114 ? 21n : 12n;
+      const b = net.chainId === 43113 || net.chainId === 43114 ? 34n : 30n;
       await runAddRoundTrip({
         source,
         coti,
         sourceCfg: chainCfg,
         cotiCfg,
+        cotiChainId: cotiNet.chainId,
+        waitRelayer: WAIT_RELAYER,
         a,
         b,
       });

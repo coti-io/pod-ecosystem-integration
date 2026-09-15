@@ -1,140 +1,60 @@
-# PoD deploy config — MAINNET (Ethereum, Avalanche C-Chain, COTI mainnet).
+# PoD deploy config — MAINNET (Avalanche C-Chain + COTI mainnet).
 # Select with: DEPLOY_CONFIG=deployConfig.mainnet.yaml
 # CreateX on COTI mainnet: 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed
 # CreateX deploy tx: 0xb6274b80bc7cda162df89894c7748a5cb7ba2eaa6004183c41a1837c3b072f1e
-# No Sablier/payroll addresses.
 forks:
   enabled: false
-  sourceRpc: http://127.0.0.1:8545
-  cotiRpc: http://127.0.0.1:8546
-  label: LIVE
+  label: 'LIVE'
 inboxSalt:
-  label: pod.inbox.v2.3
+  label: 'pod.inbox.mainnet.v0.1'
   deployer: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
-  salt: ''
-  guardedSalt: ''
-  address: ''
-  bytecodeNote: CreateX deterministic address depends on Inbox creation bytecode, including Ownable(address(1)) placeholder
-    owner in the constructor. Bump `label` (and clear salt/guardedSalt/address) whenever Inbox bytecode changes before redeploying.
-  runbook: 'After inbox deploy: priceOracle (setInboxTokens → seed prices/feeds → refreshCache) → feeConfig (min-fee templates
-    + gasPriceBounds) → wireInboxOracle. On non-EIP-1559 chains (COTI), gasPriceBounds are required. Inbox.init wires FeeManager
-    (and COTI MpcAbiReEncode) as DELEGATECALL helpers; apps still bind only the Inbox address.'
+  salt: '0xdF9F8FcA4591227C092FCBAb45A846C19fb6d1ae00da6f686d1ea42f21140585'
+  guardedSalt: '0x4c8e92631183c8d78d1609374aafe981ebec6aaa22d63618d12b9195bacc1d95'
+  address: '0x62B81447cf3D691cA98166225F889d4A22AF966d'
+  bytecodeNote: 'CreateX deterministic address depends on Inbox creation bytecode, including Ownable(address(1))
+    placeholder owner in the constructor. Bump `label` (and clear salt/guardedSalt/address) whenever Inbox bytecode
+    changes before redeploying.'
+  runbook: 'After inbox deploy: priceOracle (setInboxTokens → seed prices/feeds → refreshCache) → feeConfig (min-fee
+    templates + gasPriceBounds) → wireInboxOracle. On non-EIP-1559 chains (COTI), gasPriceBounds are required.
+    Inbox.init wires FeeManager (and COTI MpcAbiReEncode) as DELEGATECALL helpers; apps still bind only the Inbox
+    address.'
 mpcAbiCodecSalt:
   label: 'pod.mpc-abi-reencode.v1.0'
-  deployer: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  deployer: '0x075445b969e2a39e096dd1fbe9a323ae3353fb76'
   bytecodeNote: 'COTI only. CREATE3 MpcAbiReEncode (Inbox DELEGATECALL target). Bump label independently of inboxSalt.'
+  salt: '0x075445b969E2a39E096Dd1FBE9A323ae3353fB76007fad2c445e29fd98e49d4d'
+  guardedSalt: '0xbafca57e6c75b8c94b5ffec350f732686039a7cb67a5bde4875a4a5a0cee3868'
+  address: '0x49B6FD1a6F5b293d93BDD24eC0cdF457a7921b61'
 feeManagerSalt:
   label: 'pod.fee-manager.v1.0'
   deployer: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
   bytecodeNote: 'CREATE3 FeeManager (Inbox DELEGATECALL target) on every chain. Bump label independently of inboxSalt.'
-
+  salt: '0xdF9F8FcA4591227C092FCBAb45A846C19fb6d1ae0095300ae33c708453ff4811'
+  guardedSalt: '0x6864875981b92f5b69aa19ef4e2c8851cd6979822ee49b9b3a948ab5abd424f5'
+  address: '0x120eF5f78c1a000eC94EA91BFf9785c5a09E8166'
 roles:
-  owner: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+  owner: '0xdF9F8FcA4591227C092FCBAb45A846C19fb6d1ae'
   miners:
-  - '0x075445b969E2a39E096Dd1FBE9A323ae3353fB76'
-  - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
-  priceAdmin: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+    - '0x6a7F6e2F71CC5926A58E14e39b91F1257DDf9ca4'
+    - '0xdF9F8FcA4591227C092FCBAb45A846C19fb6d1ae'
+  priceAdmin: '0xdF9F8FcA4591227C092FCBAb45A846C19fb6d1ae'
   operators:
-  - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+    - '0x662Ff3698f9F2174DaA8Be7Dff684Ea89075de62'
   deployers:
-  - '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
-  feeRecipient: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
-  rescueRecipient: '0xdf9f8fca4591227c092fcbab45a846c19fb6d1ae'
+    - '0xdF9F8FcA4591227C092FCBAb45A846C19fb6d1ae'
+  feeRecipient: '0xE3b433eD902b59e6850c894bEc601d4D2f205721'
+  rescueRecipient: '0xE8497A039078052e7F7D33852f476C96138CDe0c'
 chains:
-  '1':
-    inbox: ''
-    feeManager: ''
-    portalImplementation: ''
-    podTokenImplementation: ''
-    privacyPortalFactory: ''
-    priceOracle: ''
-    mpcAdder: ''
+  "43114":
+    inbox: '0x62B81447cf3D691cA98166225F889d4A22AF966d'
+    feeManager: '0x120eF5f78c1a000eC94EA91BFf9785c5a09E8166'
+    portalImplementation: '0xa011ccd6eee3625cf7a2583f456ab70d09d15f0b'
+    podTokenImplementation: '0x5489f426b54124e0cf1f878bbfecc5319e50884a'
+    privacyPortalFactory: '0xc25ac091b5a6377024f8cbd90c836eac185c3a57'
+    priceOracle: '0xdf887895a9ad1f44d80d8924832a5ee302ccc7bc'
+    mpcAdder: '0xbacd97baa2a9ea3ffe9a80ec3d84c0a7c46c269e'
     oracle:
-      adapter: chainlink
-      maxStaleness: 3600
-      fetchInterval: 300
-      legs:
-        localToken: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
-        remoteToken: '0x000000000000000000000000000000000000C071'
-        portalNative: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
-      feeds:
-        inboxLocal:
-          chainlink: '0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419'
-        inboxRemote: {}
-        collateral:
-          USDC:
-            pegUsd: '1'
-          WETH:
-            chainlink: '0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419'
-      manualLegs: {}
-      consumers:
-        inbox: ''
-        privacyPortalFactory: ''
-    feeConfig:
-      local:
-        constantFee: '0'
-        gasPerByte: '10'
-        callbackExecutionGas: '100000'
-        errorLength: '256'
-        bufferRatioX10000: '5000'
-        maxMethodCallBytes: '8192'
-        maxExecutionGas: '5000000'
-        gasPriceMul: '1'
-        gasPriceDiv: '1'
-      remote:
-        constantFee: '25000000'
-        gasPerByte: '0'
-        callbackExecutionGas: '0'
-        errorLength: '0'
-        bufferRatioX10000: '0'
-        maxMethodCallBytes: '8192'
-        maxExecutionGas: '25000000'
-        gasPriceMul: '5'
-        gasPriceDiv: '1'
-    portalFee:
-      deposit:
-        fixedFee: '10000000000000'
-        percentageBps: '500'
-        maxFee: '100000000000000000'
-      withdraw:
-        fixedFee: '10000000000000'
-        percentageBps: '500'
-        maxFee: '100000000000000000'
-    gasPriceBounds:
-      minPriorityFeeWei: '0'
-      minGasPriceWei: '2000000000'
-      maxGasPriceWei: '0'
-    privacyPortalTokens:
-      p.USDC:
-        underlying: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
-        pName: Private USDC
-        pSymbol: pUSDC
-        decimals: 6
-        underlyingKind: canonical
-        underlyingLabel: USDC
-        canonicalKey: USDC
-        portal: ''
-        pToken: ''
-      p.WETH:
-        underlying: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
-        pName: Private WETH
-        pSymbol: pWETH
-        decimals: 18
-        underlyingKind: canonical
-        underlyingLabel: WETH (wrap ETH)
-        canonicalKey: WETH
-        portal: ''
-        pToken: ''
-  '43114':
-    inbox: ''
-    feeManager: ''
-    portalImplementation: ''
-    podTokenImplementation: ''
-    privacyPortalFactory: ''
-    priceOracle: ''
-    mpcAdder: ''
-    oracle:
-      adapter: chainlink
+      adapter: 'chainlink'
       maxStaleness: 3600
       fetchInterval: 300
       legs:
@@ -150,10 +70,12 @@ chains:
             pegUsd: '1'
           WAVAX:
             chainlink: '0x0A77230d17318075983913bC2145DB16C7366156'
-      manualLegs: {}
+      manualLegs:
+        remoteUsdSpot: '0.05'
       consumers:
         inbox: ''
         privacyPortalFactory: ''
+      liveAdapter: '0x0c04f9ecd9c13832c31510f8dd7d7b53e50ca841'
     feeConfig:
       local:
         constantFee: '0'
@@ -166,7 +88,7 @@ chains:
         gasPriceMul: '1'
         gasPriceDiv: '1'
       remote:
-        constantFee: '25000000'
+        constantFee: '20000000'
         gasPerByte: '0'
         callbackExecutionGas: '0'
         errorLength: '0'
@@ -190,38 +112,40 @@ chains:
       maxGasPriceWei: '0'
     privacyPortalTokens:
       p.USDC:
-        underlying: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9fcd248'
-        pName: Private USDC
-        pSymbol: pUSDC
+        underlying: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E'
+        pName: 'Private USDC'
+        pSymbol: 'pUSDC'
         decimals: 6
-        underlyingKind: canonical
-        underlyingLabel: USDC
-        canonicalKey: USDC
-        portal: ''
-        pToken: ''
+        underlyingKind: 'canonical'
+        underlyingLabel: 'USDC'
+        canonicalKey: 'USDC'
+        portal: '0xeAce463ea0B85E728D2d5404a0653Af50113356c'
+        pToken: '0x13AE6A6429fA6F2dfD0DBE79C85B28DdC74111BE'
+        motherRegistrationRequestId: '0x000000000000a86a0000000000282b3400000000000000000000000000000003'
       p.WAVAX:
         underlying: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7'
-        pName: Private WAVAX
-        pSymbol: pWAVAX
+        pName: 'Private WAVAX'
+        pSymbol: 'pWAVAX'
         decimals: 18
-        underlyingKind: canonical
-        underlyingLabel: WAVAX (wrap AVAX)
-        canonicalKey: WAVAX
-        portal: ''
-        pToken: ''
-  '2632500':
-    inbox: ''
-    feeManager: ''
-    cotiExecutor: ''
-    cotiMother: ''
-    priceOracle: ''
+        underlyingKind: 'canonical'
+        underlyingLabel: 'WAVAX (wrap AVAX)'
+        canonicalKey: 'WAVAX'
+        portal: '0x3b17A57Ecd4B74603A171024203f34E9FC473255'
+        pToken: '0xf632A73D5923BBC1F87BA727D7261436bA768c85'
+        motherRegistrationRequestId: '0x000000000000a86a0000000000282b3400000000000000000000000000000004'
+  "2632500":
+    inbox: '0x62B81447cf3D691cA98166225F889d4A22AF966d'
+    feeManager: '0x120eF5f78c1a000eC94EA91BFf9785c5a09E8166'
+    cotiExecutor: '0xb588666e72c106d80ca68994e6c18b5772183fdf'
+    cotiMother: '0x41f98bb93fc04beb03d3dd6121cd3de52cdfddd1'
+    priceOracle: '0x216ed3d3b2a1da9372caf6f2747d8f0aabe1de67'
     oracle:
-      adapter: plain
+      adapter: 'plain'
       maxStaleness: 86400
       fetchInterval: 300
       legs:
         localToken: '0x000000000000000000000000000000000000C071'
-        remoteToken: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
+        remoteToken: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7'
         portalNative: '0x000000000000000000000000000000000000C071'
       feeds:
         inboxLocal: {}
@@ -231,13 +155,13 @@ chains:
             pegUsd: '1'
       manualLegs:
         localUsdSpot: '0.05'
-        remoteUsdSpot: '3000'
+        remoteUsdSpot: '7.47'
       consumers:
         inbox: ''
         privacyPortalFactory: ''
     feeConfig:
       local:
-        constantFee: '25000000'
+        constantFee: '20000000'
         gasPerByte: '0'
         callbackExecutionGas: '0'
         errorLength: '0'
