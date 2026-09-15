@@ -111,6 +111,17 @@ const hardhatTestAccounts = () =>
 
 const cotiTestnetAccounts = () => collectTestPrivateKeys();
 
+/**
+ * Default EDR tx cap is EIP-7825 / 2^24. SYSTEM_INBOX_REMOTE_MIN_FEE is 18M gas
+ * units; InboxMiner reverts InsufficientMinerGas unless the outer mine tx can
+ * still forward that stipend after POST_CALL_GAS_RESERVE. Match inbox +
+ * sim-coti-node: 120M block, no per-tx cap.
+ */
+const edrMineGas = {
+  blockGasLimit: 120_000_000,
+  transactionGasCap: false as const,
+};
+
 export default defineConfig({
   plugins: [hardhatToolboxViemPlugin],
   // Local dir stays empty; real sources are npm package files below.
@@ -204,6 +215,7 @@ export default defineConfig({
       type: "edr-simulated",
       chainId: parseInt(process.env.HARDHAT_CHAIN_ID || "31337"),
       accounts: hardhatTestAccounts().length > 0 ? hardhatTestAccounts() : undefined,
+      ...edrMineGas,
     },
     hardhatMainnet: {
       type: "edr-simulated",
@@ -231,6 +243,7 @@ export default defineConfig({
       type: "edr-simulated",
       chainId: parseInt(process.env.SIM_COTI_CHAIN_ID || "7082401"),
       accounts: hardhatTestAccounts().length > 0 ? hardhatTestAccounts() : undefined,
+      ...edrMineGas,
     },
     localSimCoti: {
       type: "http",

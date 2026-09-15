@@ -553,7 +553,7 @@ export async function pegInboxOracleUsd1to1(params: {
 }
 
 /** Extra gas on the `batchProcessRequests` tx so the inbox can forward `targetFee` to the subcall (EIP-150). */
-const MIN_BATCH_TX_GAS_HEADROOM = 2_500_000n;
+export const MIN_BATCH_TX_GAS_HEADROOM = 2_500_000n;
 
 /**
  * Minimum gas limit for the outer `batchProcessRequests` tx so `InboxMiner` can forward the full
@@ -561,9 +561,47 @@ const MIN_BATCH_TX_GAS_HEADROOM = 2_500_000n;
  * `63/64 * gasleft()` at the CALL opcode; without `gasleft() >= ceil(targetFee * 64/63)` the subcall
  * OOGs while the batch tx still succeeds and records `errors` (misread as an MPC/precompile revert).
  */
-function minBatchTxGasForInnerStipend(targetFee: bigint): bigint {
+export function minBatchTxGasForInnerStipend(targetFee: bigint): bigint {
   if (targetFee === 0n) return 0n;
   return (targetFee * 64n + 62n) / 63n + MIN_BATCH_TX_GAS_HEADROOM;
+}
+
+/**
+ * Default Hardhat EDR / EIP-7825 per-tx cap (2^24). PEI `hardhat` + `simCoti`
+ * disable this in config (`transactionGasCap: false`). Still used to trim
+ * cheap mines and PodTest256 Hardhat writes — never when it would starve
+ * {@link minBatchTxGasForInnerStipend}.
+ */
+export const HARDHAT_EDR_TX_GAS_CAP = 16_777_216n;
+
+/**
+ * Outer `batchProcessRequests` gas. Never clamp below {@link minBatchTxGasForInnerStipend}:
+ * SYSTEM remote constantFee is 18M; a 2^24 EDR cap leaves ~16.08M after encode +
+ * POST_CALL_GAS_RESERVE and InboxMiner reverts InsufficientMinerGas.
+ */
+export function resolveMineBatchTxGas(params: {
+  chain: "coti" | "sepolia";
+  targetFee: bigint;
+  requestedGas?: bigint;
+  edrCoti: boolean;
+  cotiBlockGasLimit: bigint;
+}): bigint {
+  const minBatch = minBatchTxGasForInnerStipend(params.targetFee);
+  let gas =
+    params.requestedGas !== undefined && params.requestedGas > minBatch
+      ? params.requestedGas
+      : minBatch;
+  if (
+    (params.chain === "sepolia" || params.edrCoti) &&
+    gas > HARDHAT_EDR_TX_GAS_CAP &&
+    HARDHAT_EDR_TX_GAS_CAP >= minBatch
+  ) {
+    gas = HARDHAT_EDR_TX_GAS_CAP;
+  }
+  if (params.chain === "coti" && !params.edrCoti && gas > params.cotiBlockGasLimit) {
+    gas = params.cotiBlockGasLimit;
+  }
+  return gas;
 }
 
 /**
@@ -616,9 +654,6 @@ async function applyCotiBatchTxFeePerGasCap(
     writeOptions.gasPrice = gp < maxWeiPerGas ? gp : maxWeiPerGas;
   }
 }
-
-/** Hardhat EDR caps a single transaction at 2^24 gas; higher limits are rejected before broadcast. */
-export const HARDHAT_EDR_TX_GAS_CAP = 16_777_216n;
 
 /** viem `writeContract` options attaching the two-way native payment from {@link estimateGas}. */
 export function podTwoWayWriteOptions(fees: PodTwoWayFeeEstimate): { value: bigint; gas: bigint } {
@@ -1123,25 +1158,23 @@ export const mineRequest = async (
         targetFeeForMine = maxT;
       }
     }
-    const minBatchTxGas = minBatchTxGasForInnerStipend(targetFeeForMine);
-    let gas = options?.gas !== undefined && options.gas > minBatchTxGas ? options.gas : minBatchTxGas;
-    // Pod tests use Hardhat EDR as "Sepolia"; EDR rejects tx gas > 16M. The return-leg callback is cheap;
-    // `targetFee` on the response request can still mirror COTI fee-budget units — cap the outer tx here.
-    // simCoti is also EDR (chain 7082401), so apply the same cap on the COTI mine leg.
     const edrCoti = chain === "coti" && isSimCotiBackend();
-    if ((chain === "sepolia" || edrCoti) && gas > HARDHAT_EDR_TX_GAS_CAP) {
-      gas = HARDHAT_EDR_TX_GAS_CAP;
-    }
-    if (chain === "coti" && !edrCoti) {
-      const blockGasLimit = envBigIntOr("COTI_BLOCK_GAS_LIMIT", 120_000_000n);
-      if (gas > blockGasLimit) {
-        gas = blockGasLimit;
-      }
-    }
-    writeOptions.gas = gas;
+    const cotiBlockGasLimit = envBigIntOr("COTI_BLOCK_GAS_LIMIT", 120_000_000n);
+    writeOptions.gas = resolveMineBatchTxGas({
+      chain,
+      targetFee: targetFeeForMine,
+      requestedGas: options?.gas,
+      edrCoti,
+      cotiBlockGasLimit,
+    });
     if (chain === "coti") {
       const maxTxFeeWei = envBigIntOr("COTI_MAX_TX_FEE_WEI", 1_000_000_000_000_000_000n);
-      await applyCotiBatchTxFeePerGasCap(publicClient, gas, maxTxFeeWei, writeOptions);
+      await applyCotiBatchTxFeePerGasCap(
+        publicClient,
+        writeOptions.gas ?? 0n,
+        maxTxFeeWei,
+        writeOptions
+      );
     }
   }
   const txHash = (await inbox.write.batchProcessRequests(
