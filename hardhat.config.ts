@@ -82,6 +82,7 @@ const HARDHAT_DEFAULT_PK0 =
 const collectTestPrivateKeys = (): `0x${string}`[] => {
   const raw = [
     process.env.PRIVATE_KEY?.trim(),
+    process.env.COTI_MAINNET_PRIVATE_KEY?.trim(),
     process.env.COTI_TESTNET_PRIVATE_KEY?.trim(),
     process.env._PRIVATE_KEY?.trim(),
     process.env.PRIVATE_KEY_ACCOUNT_2?.trim(),
