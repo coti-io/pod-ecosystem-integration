@@ -37,8 +37,19 @@ export const CANONICAL_UNDERLYING: Record<number, Record<string, `0x${string}`>>
   },
   /** Avalanche C-Chain mainnet */
   43114: {
-    USDC: "0xb97Ef9Ef8734c71904D8002F8b6bc66dD9FcD248",
+    /** Circle native USDC (6 decimals). Not USDC.e. */
+    USDC: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
+    /** Tether native USDt (6 decimals). */
+    USDT: "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7",
+    /** Avalanche canonical WAVAX (18 decimals). Wrap via `deposit()` payable. */
     WAVAX: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+    /** BitGo native WBTC / LayerZero OFT (8 decimals). Not BTC.b or WBTC.e. */
+    WBTC: "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c",
+    /**
+     * Avalanche Bridge WETH.e (18 decimals). Bridged ERC-20 — not WETH9.
+     * Do not use key `WETH` here: deploy-cli treats `WETH` as native-wrap.
+     */
+    "WETH.e": "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB",
   },
 };
 

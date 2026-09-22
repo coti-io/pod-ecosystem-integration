@@ -27,6 +27,9 @@ import {
   recordOracleDeploy,
   resolveConsumerOracle,
   resolvePortalOracle,
+  seedOracleFromConfig,
+  type LiveAdapterContract,
+  type PodOracleContract,
   optionalEnv,
   podConfigureKeepInbox,
   patchBuildInfoSolcLongVersion,
@@ -1073,6 +1076,68 @@ const TARGETS: Target[] = [
         walletClient: ctx.walletClient,
       });
       console.log(`  factory wired to oracle ${oracleAddr}`);
+    },
+  },
+  {
+    id: "seedOracle",
+    label: "SeedOracle",
+    kind: "action",
+    roles: ["source", "coti"],
+    dependsOn: ["priceOracle"],
+    status: async (ctx) => {
+      const chainCfg = chainCfgSync(ctx.chainId);
+      const oracleAddr = chainCfg.priceOracle;
+      if (!isAddr(oracleAddr)) return { applied: false, detail: "no priceOracle in deployConfig" };
+      if (!(await hasOnChainCode(ctx.publicClient, oracleAddr))) {
+        return { applied: false, detail: "priceOracle has no code" };
+      }
+      const collateral = (chainCfg.oracle?.feeds?.collateral ?? {}) as Record<string, unknown>;
+      const keys = Object.keys(collateral);
+      if (keys.length === 0) return { applied: true, detail: "no collateral feeds" };
+      const oracle = await ctx.viem.getContractAt("PoDPriceOracle", oracleAddr as Address, {
+        client: { public: ctx.publicClient, wallet: ctx.walletClient },
+      });
+      const missing: string[] = [];
+      let checked = 0;
+      for (const symbol of keys) {
+        const underlying = canonicalUnderlying(ctx.chainId, symbol);
+        if (!underlying) continue;
+        checked++;
+        const price = (await oracle.read.getLivePrice([underlying])) as bigint;
+        if (price === 0n) missing.push(symbol);
+      }
+      if (checked === 0) return { applied: true, detail: "no resolvable collateral on this chain" };
+      if (missing.length === 0) return { applied: true, detail: `${checked} collateral priced` };
+      return { applied: false, detail: `unpriced: ${missing.join(", ")}` };
+    },
+    run: async (ctx) => {
+      const chainCfg = chainCfgSync(ctx.chainId);
+      const oracleConfig = oracleConfigFromChain(chainCfg);
+      const adapterType = oracleAdapterType(oracleConfig);
+      const oracleAddr = asAddress(chainCfg.priceOracle, "priceOracle");
+      const podOracle = (await ctx.viem.getContractAt("PoDPriceOracle", oracleAddr, {
+        client: { public: ctx.publicClient, wallet: ctx.walletClient },
+      })) as PodOracleContract;
+      if (adapterType === "plain") {
+        console.log("  adapter: plain — seedOracleFromConfig is a no-op (manual legs only)");
+        return;
+      }
+      const liveAdapterAddr = asAddress(chainCfg.oracle?.liveAdapter, "oracle.liveAdapter");
+      const liveAdapterName = adapterType === "band" ? "BandLiveOracle" : "ChainlinkLiveOracle";
+      const liveAdapter = (await ctx.viem.getContractAt(liveAdapterName, liveAdapterAddr, {
+        client: { public: ctx.publicClient, wallet: ctx.walletClient },
+      })) as LiveAdapterContract;
+      const writeOpts = { account: ctx.deployer, gas: COTI_ADMIN_WRITE_GAS };
+      await seedOracleFromConfig({
+        podOracle,
+        liveAdapter,
+        adapterType,
+        chainId: ctx.chainId,
+        oracleConfig,
+        publicClient: ctx.publicClient,
+        writeOpts,
+      });
+      console.log("  oracle feeds/pegs applied from deployConfig.oracle.feeds");
     },
   },
   {
