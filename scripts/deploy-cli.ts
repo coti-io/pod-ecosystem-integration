@@ -52,6 +52,8 @@ import {
   COTI_ADMIN_WRITE_GAS,
   DEPLOY_CONTRACT_GAS,
   ensureGasFunds,
+  previousInboxFromConfig,
+  requestIdVersionFromConfig,
 } from "./deploy-utils.js";
 import {
   collectRoleMismatches,
@@ -853,11 +855,14 @@ const TARGETS: Target[] = [
       const roles = chainRoles(ctx);
       const codecLabel = ctx.mpcAbiCodecSaltLabel;
       const feeLabel = ctx.feeManagerSaltLabel;
+      const cfg = await readCfg();
       const { inbox, alreadyDeployed, mpcAbiReEncode, feeManager } = await deployDeterministicInbox({
         viem: ctx.viem,
         publicClient: ctx.publicClient,
         walletClient: ctx.walletClient,
         saltLabel: ctx.inboxSaltLabel,
+        requestIdVersion: requestIdVersionFromConfig(cfg),
+        previousInbox: previousInboxFromConfig(cfg, ctx.chainId),
         deployReEncode: ctx.isCoti,
         reEncodeSaltLabel: ctx.isCoti ? codecLabel : undefined,
         feeManagerSaltLabel: feeLabel,
@@ -936,7 +941,7 @@ const TARGETS: Target[] = [
       console.log("  Next: priceOracle (setInboxTokens → seed → refreshCache), then feeConfig, then wireInboxOracle");
       return inbox.address as Address;
     },
-    verifyArgs: () => [],
+    verifyArgs: () => [String(requestIdVersionFromConfig(readCfgSync()))],
   },
   {
     id: "priceOracle",

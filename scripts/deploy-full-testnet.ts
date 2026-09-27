@@ -11,7 +11,9 @@ import {
   getChainConfig,
   getViemClients,
   podConfigureKeepInbox,
+  previousInboxFromConfig,
   readDeployConfig,
+  requestIdVersionFromConfig,
   requireSaltLabel,
   requireEnv,
 } from "./deploy-utils.js";
@@ -57,6 +59,7 @@ const main = async () => {
   const minerAddress = asAddress(requireEnv("MINER_ADDRESS"), "MINER_ADDRESS");
 
   const deployConfigEarly = await readDeployConfig();
+  const requestIdVersion = requestIdVersionFromConfig(deployConfigEarly);
   const inboxSaltLabel = requireSaltLabel({
     fromConfig: (deployConfigEarly as any).inboxSalt?.label,
     envKey: "INBOX_SALT_LABEL",
@@ -109,6 +112,8 @@ const main = async () => {
     publicClient: sourcePublicClient,
     walletClient: sourceWalletClient,
     saltLabel: inboxSaltLabel,
+    requestIdVersion,
+    previousInbox: previousInboxFromConfig(deployConfigEarly, sourceChainId),
     feeManagerSaltLabel,
   });
   const sourceInbox = sourceInboxDeploy.inbox;
@@ -171,6 +176,8 @@ const main = async () => {
     publicClient: cotiPublicClient,
     walletClient: cotiWalletClient,
     saltLabel: inboxSaltLabel,
+    requestIdVersion,
+    previousInbox: previousInboxFromConfig(deployConfigEarly, cotiChainIdNumber),
     deployReEncode: true,
     reEncodeSaltLabel: mpcAbiCodecSaltLabel,
     feeManagerSaltLabel,
@@ -325,14 +332,14 @@ const main = async () => {
   await writeDeployConfig(deployConfig);
   console.log("[deploy-full-testnet] Updated deploy config YAML");
 
-  await verifyContract(SOURCE_NETWORK, "Inbox", sourceInbox.address, []);
+  await verifyContract(SOURCE_NETWORK, "Inbox", sourceInbox.address, [String(requestIdVersion)]);
   await verifyContract(
     SOURCE_NETWORK,
     "PriceOracle",
     sourcePriceOracle.address,
     [sourceWalletClient.account.address]
   );
-  await verifyContract(COTI_NETWORK, "Inbox", cotiInbox.address, []);
+  await verifyContract(COTI_NETWORK, "Inbox", cotiInbox.address, [String(requestIdVersion)]);
   await verifyContract(
     COTI_NETWORK,
     "PriceOracle",

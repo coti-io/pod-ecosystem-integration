@@ -130,6 +130,27 @@ export const isContractDeployed = async (
 export const isCreateXAvailable = async (publicClient: PublicClient): Promise<boolean> =>
   isContractDeployed(publicClient, CREATEX_ADDRESS);
 
+const readDeployedRequestIdVersion = async (
+  publicClient: PublicClient,
+  address: Address
+): Promise<number | null> => {
+  if (!(await isContractDeployed(publicClient, address))) return null;
+  const version = await publicClient.readContract({
+    address,
+    abi: [
+      {
+        type: "function",
+        name: "REQUEST_ID_VERSION",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [{ name: "", type: "uint8" }],
+      },
+    ],
+    functionName: "REQUEST_ID_VERSION",
+  });
+  return Number(version);
+};
+
 export type InboxArtifact = { abi: Abi; bytecode: Hex };
 
 export type DeployInboxDeterministicParams = {
@@ -151,6 +172,10 @@ export type DeployInboxDeterministicParams = {
    * {FeeManager} address for Inbox.init (required on every chain).
    */
   feeManager: Address;
+  /** `deployConfig.requestIdVersion`, appended to the creation bytecode. */
+  requestIdVersion: number;
+  /** This chain's previous inbox, when deployConfig still has it. */
+  previousInbox?: Address;
 };
 
 export type DeployInboxDeterministicResult = {
@@ -264,8 +289,18 @@ export const deployCreate3Deterministic = async (
 export const deployInboxDeterministic = async (
   params: DeployInboxDeterministicParams
 ): Promise<DeployInboxDeterministicResult> => {
-  const { publicClient, walletClient, deployer, chainId, artifact, saltLabel, mpcAbiReEncode, feeManager } =
-    params;
+  const {
+    publicClient,
+    walletClient,
+    deployer,
+    chainId,
+    artifact,
+    saltLabel,
+    mpcAbiReEncode,
+    feeManager,
+    requestIdVersion,
+    previousInbox,
+  } = params;
 
   if (!(await isCreateXAvailable(publicClient))) {
     throw new Error(
@@ -285,6 +320,20 @@ export const deployInboxDeterministic = async (
 
   const salt = buildInboxSalt(deployer, saltLabel);
   const predictedAddress = await precomputeCreate3Address(publicClient, deployer, salt);
+  const creationBytecode = concatHex([
+    artifact.bytecode,
+    encodeAbiParameters([{ type: "uint8" }], [requestIdVersion]),
+  ]);
+
+  if (previousInbox && getAddress(previousInbox) !== predictedAddress) {
+    const previousVersion = await readDeployedRequestIdVersion(publicClient, getAddress(previousInbox));
+    if (previousVersion !== null && previousVersion === requestIdVersion) {
+      throw new Error(
+        `Inbox ${previousInbox} already uses request id version ${previousVersion}. ` +
+          `Bump deployConfig.requestIdVersion before deploying ${predictedAddress}.`
+      );
+    }
+  }
 
   if (await isContractDeployed(publicClient, predictedAddress)) {
     // Fail-closed: CREATE3 cannot re-run init. If a codec was supplied, it must already be wired.
@@ -338,6 +387,13 @@ export const deployInboxDeterministic = async (
           `salt/address) so a fresh deployCreate3AndInit wires FeeManager, then redeploy.`
       );
     }
+    const onChain = await readDeployedRequestIdVersion(publicClient, predictedAddress);
+    if (onChain !== null && onChain !== requestIdVersion) {
+      throw new Error(
+        `Inbox ${predictedAddress} is already deployed with request id version ${onChain}. ` +
+          `deployConfig.requestIdVersion is ${requestIdVersion}. Pick a new inboxSalt.label.`
+      );
+    }
     return { address: predictedAddress, predictedAddress, alreadyDeployed: true };
   }
 
@@ -358,7 +414,7 @@ export const deployInboxDeterministic = async (
     address: CREATEX_ADDRESS,
     abi: CREATEX_ABI,
     functionName: "deployCreate3AndInit",
-    args: [salt, artifact.bytecode, initData, { constructorAmount: 0n, initCallAmount: 0n }],
+    args: [salt, creationBytecode, initData, { constructorAmount: 0n, initCallAmount: 0n }],
   });
 
   const simulated = getAddress(result as Address);
@@ -376,12 +432,12 @@ export const deployInboxDeterministic = async (
       functionName: "deployCreate3AndInit",
       args: [
         salt,
-        artifact.bytecode,
+        creationBytecode,
         initData,
         { constructorAmount: 0n, initCallAmount: 0n },
       ],
     }),
-    initCodeBytes: (artifact.bytecode.length - 2) / 2,
+    initCodeBytes: (creationBytecode.length - 2) / 2,
     initOverheadGas: 3_000_000n,
   });
   const txHash = await walletClient.writeContract({ ...request, gas });

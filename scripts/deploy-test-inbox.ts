@@ -39,7 +39,8 @@ export const deployTestInbox = async (
     helpersByKey.set(walletKey, helpersPromise);
   }
   const helpers = await helpersPromise;
-  const inbox = await viem.deployContract("Inbox", [], opts);
+  // Version 1 matches the inbox test packer. Production passes deployConfig.requestIdVersion.
+  const inbox = await viem.deployContract("Inbox", [1], opts);
   Object.defineProperty(inbox, "mpcAbiReEncode", {
     value: helpers.mpcAbiReEncode,
     enumerable: true,

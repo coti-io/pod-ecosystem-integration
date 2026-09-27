@@ -208,6 +208,8 @@ export const oracleAdapterType = (oracleConfig?: OracleConfigJson): OracleAdapte
 };
 
 type DeployConfig = {
+  /** Generation byte passed to the Inbox constructor. Bump it when `inboxSalt.label` changes. */
+  requestIdVersion?: number | string;
   inboxSalt?: { label?: string; [key: string]: unknown };
   mpcAbiCodecSalt?: { label?: string; [key: string]: unknown };
   feeManagerSalt?: { label?: string; [key: string]: unknown };
@@ -1864,6 +1866,10 @@ export const deployDeterministicInbox = async (params: {
   reEncodeSaltLabel?: string;
   /** From deployConfig (`feeManagerSalt.label`). Required — FeeManager is deployed on every chain. */
   feeManagerSaltLabel: string;
+  /** `deployConfig.requestIdVersion`. */
+  requestIdVersion: number;
+  /** This chain's recorded inbox, when set. */
+  previousInbox?: Address;
 }): Promise<
   DeployInboxDeterministicResult & {
     inbox: any;
@@ -1959,6 +1965,8 @@ export const deployDeterministicInbox = async (params: {
     saltLabel: params.saltLabel,
     mpcAbiReEncode,
     feeManager,
+    requestIdVersion: params.requestIdVersion,
+    previousInbox: params.previousInbox,
   });
   const inbox = await params.viem.getContractAt(INBOX_FQN, result.address, {
     client: { public: params.publicClient, wallet: params.walletClient },
@@ -2040,6 +2048,27 @@ export const appendDeploymentLog = async (entry: DeploymentLogEntry) => {
   await fs.appendFile(logPath, `${JSON.stringify(payload)}\n`, "utf8");
 };
 
+
+export const requestIdVersionFromConfig = (config: { requestIdVersion?: unknown }): number => {
+  const parsed =
+    typeof config.requestIdVersion === "number" ? config.requestIdVersion : Number(config.requestIdVersion);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 255) {
+    throw new Error(
+      "deployConfig.requestIdVersion is required (integer 1-255). " +
+        "Bump it whenever inboxSalt.label changes, or the new Inbox reissues old request ids."
+    );
+  }
+  return parsed;
+};
+
+export const previousInboxFromConfig = (
+  config: { chains?: Record<string, { inbox?: string }> },
+  chainId: number
+): Address | undefined => {
+  const raw = config.chains?.[String(chainId)]?.inbox?.trim();
+  if (!raw || !raw.startsWith("0x") || raw.length !== 42) return undefined;
+  return getAddress(raw);
+};
 
 /** Resolve CREATE3 salt label: deployConfig field, else env. Never a code constant. */
 export const requireSaltLabel = (params: {
